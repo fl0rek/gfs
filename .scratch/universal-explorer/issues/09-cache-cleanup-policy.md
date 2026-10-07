@@ -1,7 +1,7 @@
 # Cache cleanup policy
 
 Type: grilling
-Status: claimed
+Status: open
 Blocked by: 01
 
 ## Question

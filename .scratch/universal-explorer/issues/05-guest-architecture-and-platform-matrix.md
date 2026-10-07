@@ -1,7 +1,7 @@
 # Guest architecture and platform matrix
 
 Type: grilling
-Status: open
+Status: claimed
 Blocked by: 02, 03
 
 ## Question

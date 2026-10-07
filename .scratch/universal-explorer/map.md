@@ -26,6 +26,8 @@ A proof-of-concept Universal Explorer runtime that you use daily to run the Herm
 
 - [What Hermes needs from its environment](issues/01-what-hermes-needs-from-its-environment.md): Python + Node + WAL SQLite under one `HERMES_HOME`, whose subdirectories split cleanly across machine, datacombs and cache, except its mixed `cache/` and the live `state.db`. Pluggable terminal backends.
 - [Booting a nixpkgs Linux image in the browser](issues/02-booting-a-nixpkgs-linux-image-in-the-browser.md): no full NixOS boot exists in a browser yet. qemu-wasm with an x86_64 guest is the only proven nixpkgs path (trynix). x86_64 and aarch64 are the only shared-image candidates. Browser persistence and networking are unsolved everywhere.
+- [Native VM options per host platform](issues/03-native-vm-options-per-host-platform.md): guest arch must match host arch on Mac (aarch64 only) and under KVM. No single VMM library is clean across Linux, macOS and Windows; libkrun and OpenVMM come closest. A custom filesystem is easy on Linux (virtiofsd crate) but needs a vsock client on Mac.
+- [Existing formats to adopt for datacombs](issues/04-existing-formats-to-adopt-for-datacombs.md): no single format covers every layer. git (gitoxide or isomorphic-git) has a history chain and browser builds; Xet, restic and borg bring content-defined chunking. `state.db` capture has four candidate approaches. Nothing has been benchmarked.
 
 ## Not yet specified
 
