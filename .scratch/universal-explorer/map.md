@@ -1,0 +1,41 @@
+# Universal Explorer
+
+Label: wayfinder:map
+
+## Destination
+
+A proof-of-concept Universal Explorer runtime that you use daily to run the Hermes Agent harness, on every platform, natively and in a browser (wasm). A session boots from **machine**, writes to **datacombs**, and scratches in **cache**. You can see who changed what and when in a comb, verify its history chain, roll it back, and preview its past. After a restart, cache is gone and machine is unchanged. The map is done when everything needed to build that is decided.
+
+## Notes
+
+- Domain: OS and runtime for agent harnesses; content-addressed and versioned storage; Nix; VMs and wasm emulation.
+- Skills every session should consult: `grilling` + `domain-modeling` (default), `research` for AFK fact-finding, `prototype` when "how should it look/behave" is the question. Read `GLOSSARY.md` first.
+- Standing preferences:
+  - Rust for anything we write.
+  - **Native and wasm are first class.** Every format and mechanism decision must pass a "works in the browser too" check.
+  - All platforms are the goal: Linux, macOS, Windows.
+  - Performance counts. It is meant to be a real tool, so no leaving performance on the table.
+  - "Crypt-based" means content-addressed, hash-chained integrity. Replication across machines comes later, preferably by adopting an existing protocol rather than inventing one.
+  - Machine and the in-browser image both come from the same nixpkgs.
+  - Interfaces (paths like `/datacombs/nix`, how the past is previewed) emerge from use. Prototype before fixing them.
+  - **Pace: start slow.** One ticket per session, no sudden ramp-ups.
+
+## Decisions so far
+
+<!-- one line per closed ticket -->
+
+## Not yet specified
+
+- **Replication / sync** between machines, and between native and browser copies of a comb: which protocol to adopt, and the conflict model.
+- **Signing and anchoring**: per-commit signatures, where keys live, whether the history head is anchored outside the machine (TPM, witness) to resist local root.
+- **Encryption at rest** for combs: wanted at all, and when?
+- **Browser persistence**: how combs live in the browser (OPFS?) and survive tab or close.
+- **Windows host specifics**, once the native VM research is in.
+- **Benchmark**: what "native vs Universal Explorer" workload proves we didn't leave performance on the table.
+- **Harnesses beyond Hermes**: what the harness contract looks like once a second one arrives.
+- **Retention and pruning** of comb history.
+
+## Out of scope
+
+- Consensus, tokens, multi-party trust. Replication between one person's machines is in scope later; a blockchain network is not.
+- Bare-metal daily-driver distro install. The destination is a runtime for harnesses.
