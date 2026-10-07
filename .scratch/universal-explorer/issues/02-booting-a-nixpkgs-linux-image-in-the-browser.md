@@ -16,4 +16,6 @@ For each, find out:
 - disk and filesystem options for persistence (OPFS, 9p, virtio)
 - licence and maintenance health
 
+Findings: branch `research/browser-linux-boot`, `docs/research/browser-linux-boot.md`.
+
 Which guest arch keeps native and browser on one image?

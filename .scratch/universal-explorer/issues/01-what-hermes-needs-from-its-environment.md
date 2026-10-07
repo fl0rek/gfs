@@ -14,4 +14,6 @@ What does the Hermes Agent harness (Nous Research) need from the machine it runs
 - network needs
 - which directories churn heavily, which hold durable state, and which are reproducible
 
+Findings: branch `research/hermes-environment`, `docs/research/hermes-environment.md`.
+
 This feeds where its paths land across machine, datacombs and cache, and what one change in its history should mean.
