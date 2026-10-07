@@ -24,6 +24,9 @@ A proof-of-concept Universal Explorer runtime that you use daily to run the Herm
 
 <!-- one line per closed ticket -->
 
+- [What Hermes needs from its environment](issues/01-what-hermes-needs-from-its-environment.md): Python + Node + WAL SQLite under one `HERMES_HOME`, whose subdirectories split cleanly across machine, datacombs and cache, except its mixed `cache/` and the live `state.db`. Pluggable terminal backends.
+- [Booting a nixpkgs Linux image in the browser](issues/02-booting-a-nixpkgs-linux-image-in-the-browser.md): no full NixOS boot exists in a browser yet. qemu-wasm with an x86_64 guest is the only proven nixpkgs path (trynix). x86_64 and aarch64 are the only shared-image candidates. Browser persistence and networking are unsolved everywhere.
+
 ## Not yet specified
 
 - **Replication / sync** between machines, and between native and browser copies of a comb: which protocol to adopt, and the conflict model.
