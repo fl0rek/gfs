@@ -1,6 +1,6 @@
-# Wayfinder
+# Universal Explorer
 
-A runtime for harnesses in which every byte lives in exactly one of three
+A runtime for agent harnesses in which every byte lives in exactly one of three
 root directories, and each directory carries one set of guarantees.
 
 ## Root directories
