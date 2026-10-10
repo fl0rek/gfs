@@ -50,4 +50,5 @@ Mistakes made in earlier sessions. Don't repeat them.
 
 - `/wayfinder` was meant as the skill, but it was mistaken for the project name and a whole repo was scaffolded with code. Read a slash-word as a possible skill first.
 - An architecture doc was written before any decision existed. That broke "plan, don't do".
+- In a claude.ai session, `/wayfinder` went to the Skill tool, found nothing, and was reported as "no such skill". It is vendored here, so Read `.claude/skills/wayfinder/SKILL.md` and follow it. The project doc `claude/session-start.md` tells new sessions to clone this repo first.
 - The tier names drifted from the user's names. They are **machine / datacombs / cache**, not system, ledger or persist.
