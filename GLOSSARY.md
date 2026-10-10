@@ -41,6 +41,10 @@ _Avoid_: repo, volume, bucket, datacomb (for a single one)
 Everything connected to one datacombs instance and its backing storage, sharing an immediate view of the same objects; e.g. a shared directory on one host.
 _Avoid_: device, peer, host
 
+**history entry**:
+One link in a comb's history chain, recording one tool call's changes to that comb, or a turn's changes made outside any tool call, together with who made them and when.
+_Avoid_: commit, snapshot, revision
+
 **rollback**:
 Restoring a comb to an earlier state by appending a new history entry; history is never rewritten or truncated.
 _Avoid_: reset, undo, revert-in-place

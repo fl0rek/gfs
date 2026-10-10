@@ -31,6 +31,7 @@ A proof-of-concept Universal Explorer runtime that you use daily to run the Herm
 - [Existing formats to adopt for datacombs](issues/04-existing-formats-to-adopt-for-datacombs.md): no single format covers every layer. git (gitoxide or isomorphic-git) has a history chain and browser builds; Xet, restic and borg bring content-defined chunking. `state.db` capture has four candidate approaches. Nothing has been benchmarked.
 - [Guest architecture and platform matrix](issues/05-guest-architecture-and-platform-matrix.md): no guest VM. We own syscalls; the userland is WASIX wasm built with Nix; gfs is the world's filesystem; the same binaries run in browser and native at about 1.5×. Offload for heavy native work. qemu-wasm is the fallback.
 - [What one datacomb is](issues/06-what-one-datacomb-is.md): a comb is one top-level directory with its own git-style history and is a full flake; its version is the head hash. Each node holds a subjective view of one global structure; same-named combs coexist as versions. Paths are `<comb>` (checkout), `<comb>@<hash>` (read-only) and `<comb>$<branch>` (moving). Sessions see only granted combs.
+- [What one entry in a comb's history is](issues/07-what-one-entry-in-a-combs-history-is.md): one history entry per tool call that changed the comb; writes outside tool calls are coalesced per turn (or quiescence). The author is the session acting for you, with harness, model and principal recorded; the committer is the node. Arguments are stored by hash; messages are generated, never waiting on a model. A cross-comb call makes one entry per comb, sharing an ID. Outside edits are committed as an *external* entry and never dropped.
 
 ## Not yet specified
 
@@ -43,7 +44,7 @@ A proof-of-concept Universal Explorer runtime that you use daily to run the Herm
 - **Harness components WASIX can't run**: Hermes's Node TUI and Chromium browser tools.
 - **Benchmark**: what "native vs Universal Explorer" workload proves we didn't leave performance on the table.
 - **Harnesses beyond Hermes**: what the harness contract looks like once a second one arrives.
-- **Retention and pruning** of comb history.
+- **Retention and pruning** of comb history. Tool-call argument objects are stored by hash, so they can be pruned without breaking the chain.
 
 ## Out of scope
 
