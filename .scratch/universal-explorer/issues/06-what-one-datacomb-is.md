@@ -1,7 +1,7 @@
 # What one datacomb is
 
 Type: grilling
-Status: open
+Status: claimed
 Blocked by: 04
 
 ## Question
