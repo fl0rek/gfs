@@ -30,3 +30,13 @@ _Avoid_: ledger, persist, state
 **cache**:
 The read-write root directory for discardable data, held in RAM, spilled to disk, and cleaned up automatically.
 _Avoid_: volatile, tmp, scratch
+
+## Datacombs
+
+**comb**:
+One top-level directory in datacombs, carrying its own independent history chain; the unit that is verified, rolled back and merged.
+_Avoid_: repo, volume, bucket, datacomb (for a single one)
+
+**rollback**:
+Restoring a comb to an earlier state by appending a new history entry; history is never rewritten or truncated.
+_Avoid_: reset, undo, revert-in-place
