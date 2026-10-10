@@ -27,3 +27,15 @@ Settled:
 - **Same-named combs from different origins sit side by side.** They are "separate but equal": each shows up as another available version. References carry the version, so you can't pick the wrong one by accident. Nothing merges implicitly.
 - Combs exist only at the **top level** of `/datacombs`; they don't nest.
 - **A session sees only the combs it was granted.** It can create new combs. Who issues grants, and whether a grant can be read-only, belongs to "Where the sandbox boundary sits".
+
+## Progress (grilling round 3, 2026-10-10)
+
+Settled:
+- **Version = head hash.** As in git, a head hash commits to the comb's entire state and history. "Another available version" means another head.
+- **Paths in `/datacombs`:**
+  - `/datacombs/<comb>` is the **local checkout**. It stays wherever the user left it.
+  - `/datacombs/<comb>@<hash>` accesses one specific version, if it exists on the node.
+  - `/datacombs/<comb>$<branch>` is a **branch**: it moves over time and persists, e.g. `/datacombs/nix$hostname1` or `/datacombs/gfs$fix-panic`.
+  - Backend idea: one worktree per branch.
+- **"Store"** means the engine that makes combs appear as files under `/datacombs` for the harness. It is not the Nix store. The first iteration may be just a backing directory that holds the structure.
+- **Each comb is assumed to be a valid flake.**
