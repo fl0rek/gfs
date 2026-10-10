@@ -39,3 +39,12 @@ Settled:
   - Backend idea: one worktree per branch.
 - **"Store"** means the engine that makes combs appear as files under `/datacombs` for the harness. It is not the Nix store. The first iteration may be just a backing directory that holds the structure.
 - **Each comb is assumed to be a valid flake.**
+
+## Progress (grilling round 4, 2026-10-10)
+
+Settled:
+- `/datacombs/<comb>@<hash>` is **read-only**. To branch from a version, make a `$branch` at that hash.
+- **Every comb is a full flake**, data combs included.
+- **"Datacombs" names the whole system** that supports each node's subjective view, not just the root directory. "Store" and "comb engine" are not used.
+
+Waiting for the user to confirm the shared understanding before resolving.

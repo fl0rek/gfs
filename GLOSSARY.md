@@ -24,8 +24,8 @@ The read-only root directory holding everything built from Nix; reproducible, ne
 _Avoid_: system, rootfs, base
 
 **datacombs**:
-The read-write root directory for persistent data, where every change is versioned and auditable.
-_Avoid_: ledger, persist, state
+The whole system that gives a node its subjective view of one global, versioned, auditable structure of combs, and the read-write root directory where that view appears.
+_Avoid_: ledger, persist, state, store, comb engine
 
 **cache**:
 The read-write root directory for discardable data, held in RAM, spilled to disk, and cleaned up automatically.
@@ -36,6 +36,10 @@ _Avoid_: volatile, tmp, scratch
 **comb**:
 One top-level directory in datacombs, carrying its own independent history chain; the unit that is verified, rolled back and merged.
 _Avoid_: repo, volume, bucket, datacomb (for a single one)
+
+**node**:
+Everything connected to one datacombs instance and its backing storage, sharing an immediate view of the same objects; e.g. a shared directory on one host.
+_Avoid_: device, peer, host
 
 **rollback**:
 Restoring a comb to an earlier state by appending a new history entry; history is never rewritten or truncated.
