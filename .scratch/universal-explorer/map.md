@@ -30,10 +30,11 @@ A proof-of-concept Universal Explorer runtime that you use daily to run the Herm
 - [Native VM options per host platform](issues/03-native-vm-options-per-host-platform.md): guest arch must match host arch on Mac (aarch64 only) and under KVM. No single VMM library is clean across Linux, macOS and Windows; libkrun and OpenVMM come closest. A custom filesystem is easy on Linux (virtiofsd crate) but needs a vsock client on Mac.
 - [Existing formats to adopt for datacombs](issues/04-existing-formats-to-adopt-for-datacombs.md): no single format covers every layer. git (gitoxide or isomorphic-git) has a history chain and browser builds; Xet, restic and borg bring content-defined chunking. `state.db` capture has four candidate approaches. Nothing has been benchmarked.
 - [Guest architecture and platform matrix](issues/05-guest-architecture-and-platform-matrix.md): no guest VM. We own syscalls; the userland is WASIX wasm built with Nix; gfs is the world's filesystem; the same binaries run in browser and native at about 1.5×. Offload for heavy native work. qemu-wasm is the fallback.
+- [What one datacomb is](issues/06-what-one-datacomb-is.md): a comb is one top-level directory with its own git-style history and is a full flake; its version is the head hash. Each node holds a subjective view of one global structure; same-named combs coexist as versions. Paths are `<comb>` (checkout), `<comb>@<hash>` (read-only) and `<comb>$<branch>` (moving). Sessions see only granted combs.
 
 ## Not yet specified
 
-- **Replication / sync** between machines, and between native and browser copies of a comb: which protocol to adopt, and the conflict model.
+- **Replication / sync** between nodes, and between native and browser copies of a comb: which protocol to adopt. Same-named combs already coexist as separate versions with no implicit merge, so what's open is moving versions between nodes. A node is currently just a shared backing directory; p2p is the goal.
 - **Signing and anchoring**: per-commit signatures, where keys live, whether the history head is anchored outside the machine (TPM, witness) to resist local root.
 - **Encryption at rest** for combs: wanted at all, and when?
 - **Browser persistence**: how combs live in the browser (OPFS?) and survive tab or close.

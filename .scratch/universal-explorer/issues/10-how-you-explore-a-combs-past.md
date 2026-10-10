@@ -12,3 +12,5 @@ What interface feels natural for seeing who changed what and when, verifying his
 - a timeline view, which could live in the browser build
 
 Build rough versions to react to.
+
+Also cover browsing the other available versions (`@<hash>`) and branches (`$<branch>`) of a comb (see [What one datacomb is](06-what-one-datacomb-is.md)).

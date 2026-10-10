@@ -17,7 +17,7 @@ This also covers which host gets which VM technology for the PoC.
 
 Settled:
 - Browser guest arch: x86_64 first (proven via trynix); aarch64 not ruled out.
-- One kernel config with both virtio-9p and virtio-fs; how datacombs are served is left to "Where the datacomb engine runs".
+- One kernel config with both virtio-9p and virtio-fs; how datacombs are served is left to "Where datacombs runs".
 - First host: **the browser**. Native host: **Asahi Linux** (aarch64, Apple Silicon, KVM).
 - First iteration only needs to run Hermes, not arbitrary nixpkgs.
 

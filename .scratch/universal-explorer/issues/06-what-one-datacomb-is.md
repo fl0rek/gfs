@@ -1,7 +1,7 @@
 # What one datacomb is
 
 Type: grilling
-Status: claimed
+Status: resolved
 Blocked by: 04
 
 ## Question
@@ -47,4 +47,22 @@ Settled:
 - **Every comb is a full flake**, data combs included.
 - **"Datacombs" names the whole system** that supports each node's subjective view, not just the root directory. "Store" and "comb engine" are not used.
 
-Waiting for the user to confirm the shared understanding before resolving.
+
+## Answer
+
+**A comb** is one top-level directory in `/datacombs`, with its own git-style history. Combs don't nest. Every comb is a full Nix flake, data combs included. Its **version** is a head hash, which commits to the comb's whole state and history.
+
+**Datacombs** is one global structure that everyone edits. Each **node** holds a subjective, partial view of it. For now, a node is whatever connects to one backing store, e.g. the shared directory on westfall. P2P comes later.
+
+**Same-named combs** from different origins coexist as separate available versions. They are never merged implicitly, and references always carry the version.
+
+**Paths.** A session sees only the combs it was granted, and it can create new ones.
+- `/datacombs/<comb>`: the local checkout, left wherever the user put it.
+- `/datacombs/<comb>@<hash>`: that exact version, read-only.
+- `/datacombs/<comb>$<branch>`: a persistent, moving branch, backed by a worktree.
+
+**History** is append-only, and a rollback appends an entry. Reaching an exact state after a rollback is manual for now.
+
+The **Nix store** stays in **machine** for now; that is not locked in.
+
+Glossary: comb, node, rollback; datacombs redefined as the whole system.
