@@ -1,7 +1,7 @@
 # Does Hermes run on WASIX Python?
 
 Type: task
-Status: open
+Status: claimed
 Blocked by:
 
 ## Question
