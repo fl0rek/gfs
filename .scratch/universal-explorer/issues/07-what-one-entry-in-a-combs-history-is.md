@@ -1,7 +1,7 @@
 # What one entry in a comb's history is
 
 Type: grilling
-Status: open
+Status: claimed
 Blocked by: 01, 06
 
 ## Question
