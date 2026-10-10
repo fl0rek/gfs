@@ -2,6 +2,19 @@
 
 Run on the Asahi box (aarch64). The cloud workspace could not: its network policy blocks `registry.wasmer.io` and `cdn.wasmer.io`, where WASIX Python lives. Paste each step's output back into a session; it records the answer.
 
+## Quick path: one command
+
+Steps 1–4 are packaged as a flake ([flake.nix](flake.nix), [run.sh](run.sh)). Hermes is pinned to the audited commit.
+
+```sh
+export OPENROUTER_API_KEY=...   # optional: enables the real Hermes turn in step 4
+nix run 'github:fl0rek/gfs?dir=.scratch/universal-explorer/assets/does-hermes-run-on-wasix-python'
+```
+
+It writes everything to `~/.cache/ue-wasix-smoke/report.txt`; paste that back. Knobs: `UE_PY=3.13` to force a version, `UE_SKIP_HOST=1` to skip the host baseline, `UE_HERMES_ARGS="--provider openrouter -m <model>"` to pick a model. The browser leg (step 5) is still manual.
+
+The manual steps below are what the flake does, for when it breaks.
+
 Wasmer CLI flags and package names below are from docs and memory, not tested here. If one is wrong, note what worked instead; that is a finding too.
 
 ## 0. Setup

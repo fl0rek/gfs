@@ -18,7 +18,7 @@ Record what works, what breaks, and the workarounds. If it fails badly, the fall
 
 ### 2026-10-10: static audit; runtime checks handed off
 
-The cloud workspace can't run this: its network policy blocks `registry.wasmer.io` and `cdn.wasmer.io`. The runtime checks go to the user's Asahi box via [the checklist](../assets/does-hermes-run-on-wasix-python/checklist.md) and [smoke.py](../assets/does-hermes-run-on-wasix-python/smoke.py). Status stays `claimed` until those results are in.
+The cloud workspace can't run this: its network policy blocks `registry.wasmer.io` and `cdn.wasmer.io`. The runtime checks go to the user's Asahi box via a flake (`nix run 'github:fl0rek/gfs?dir=.scratch/universal-explorer/assets/does-hermes-run-on-wasix-python'`), [the checklist](../assets/does-hermes-run-on-wasix-python/checklist.md) and [smoke.py](../assets/does-hermes-run-on-wasix-python/smoke.py). Status stays `claimed` until those results are in.
 
 Established without running anything (Hermes at `5a487bca`, 2026-10-10):
 
