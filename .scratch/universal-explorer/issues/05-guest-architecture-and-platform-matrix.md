@@ -22,3 +22,5 @@ Settled:
 - First iteration only needs to run Hermes, not arbitrary nixpkgs.
 
 Open, waiting on research: "one definition, per-arch builds" vs **wasm everywhere** (run the same wasm artifact natively too). How much performance does Hermes actually need, and how much does wasm emulation cost compared with KVM on Asahi?
+
+Findings for the wasm question: branch `research/wasm-everywhere`, `docs/research/wasm-everywhere.md`. User reaction: the slowdown is acceptable for a harness, given a native escape hatch (copy files out, build locally) and the fact that we control the harness's whole environment, which is where gfs fits.
