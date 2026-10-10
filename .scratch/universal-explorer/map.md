@@ -13,7 +13,8 @@ A proof-of-concept Universal Explorer runtime that you use daily to run the Herm
 - Standing preferences:
   - Rust for anything we write.
   - **Native and wasm are first class.** Every format and mechanism decision must pass a "works in the browser too" check.
-  - All platforms are the goal: Linux, macOS, Windows.
+  - All platforms are the goal: Linux, macOS, Windows. **First host is the browser; the user's native host is Asahi Linux (aarch64).**
+  - First iteration only has to run Hermes, not arbitrary nixpkgs.
   - Performance counts. It is meant to be a real tool, so no leaving performance on the table.
   - "Crypt-based" means content-addressed, hash-chained integrity. Replication across machines comes later, preferably by adopting an existing protocol rather than inventing one.
   - Machine and the in-browser image both come from the same nixpkgs.
