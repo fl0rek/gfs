@@ -3,6 +3,20 @@
 A runtime for agent harnesses in which every byte lives in exactly one of three
 root directories, and each directory carries one set of guarantees.
 
+## Runtime
+
+**harness**:
+An agent program that Universal Explorer runs, e.g. Hermes Agent.
+_Avoid_: agent, app
+
+**gfs**:
+The filesystem Universal Explorer presents to a harness, composing machine, datacombs and cache into one root. The name is recursive ("gfs filesystem").
+_Avoid_: VFS, root view, the filesystem
+
+**offload**:
+Running work natively on the host, outside the harness's wasm world, on files taken from gfs, with the results returned.
+_Avoid_: escape hatch, passthrough
+
 ## Root directories
 
 **machine**:

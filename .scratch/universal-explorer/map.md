@@ -17,7 +17,7 @@ A proof-of-concept Universal Explorer runtime that you use daily to run the Herm
   - First iteration only has to run Hermes, not arbitrary nixpkgs.
   - Performance counts. It is meant to be a real tool, so no leaving performance on the table.
   - "Crypt-based" means content-addressed, hash-chained integrity. Replication across machines comes later, preferably by adopting an existing protocol rather than inventing one.
-  - Machine and the in-browser image both come from the same nixpkgs.
+  - **No guest VM: we own the harness's world at the syscall level.** The userland is WASIX wasm built with Nix, gfs is the world's filesystem, and the same binaries run in the browser and natively (Wasmer). Heavy native work goes through offload.
   - Interfaces (paths like `/datacombs/nix`, how the past is previewed) emerge from use. Prototype before fixing them.
   - **Pace: start slow.** One ticket per session, no sudden ramp-ups.
 
@@ -29,6 +29,7 @@ A proof-of-concept Universal Explorer runtime that you use daily to run the Herm
 - [Booting a nixpkgs Linux image in the browser](issues/02-booting-a-nixpkgs-linux-image-in-the-browser.md): no full NixOS boot exists in a browser yet. qemu-wasm with an x86_64 guest is the only proven nixpkgs path (trynix). x86_64 and aarch64 are the only shared-image candidates. Browser persistence and networking are unsolved everywhere.
 - [Native VM options per host platform](issues/03-native-vm-options-per-host-platform.md): guest arch must match host arch on Mac (aarch64 only) and under KVM. No single VMM library is clean across Linux, macOS and Windows; libkrun and OpenVMM come closest. A custom filesystem is easy on Linux (virtiofsd crate) but needs a vsock client on Mac.
 - [Existing formats to adopt for datacombs](issues/04-existing-formats-to-adopt-for-datacombs.md): no single format covers every layer. git (gitoxide or isomorphic-git) has a history chain and browser builds; Xet, restic and borg bring content-defined chunking. `state.db` capture has four candidate approaches. Nothing has been benchmarked.
+- [Guest architecture and platform matrix](issues/05-guest-architecture-and-platform-matrix.md): no guest VM. We own syscalls; the userland is WASIX wasm built with Nix; gfs is the world's filesystem; the same binaries run in browser and native at about 1.5×. Offload for heavy native work. qemu-wasm is the fallback.
 
 ## Not yet specified
 
@@ -36,7 +37,9 @@ A proof-of-concept Universal Explorer runtime that you use daily to run the Herm
 - **Signing and anchoring**: per-commit signatures, where keys live, whether the history head is anchored outside the machine (TPM, witness) to resist local root.
 - **Encryption at rest** for combs: wanted at all, and when?
 - **Browser persistence**: how combs live in the browser (OPFS?) and survive tab or close.
-- **Windows host specifics**, once the native VM research is in.
+- **Offload protocol**: how files leave a comb for native execution and come back. Designed separately; the user will drive it.
+- **Native host runtime**: Wasmer embedding versus alternatives, per platform.
+- **Harness components WASIX can't run**: Hermes's Node TUI and Chromium browser tools.
 - **Benchmark**: what "native vs Universal Explorer" workload proves we didn't leave performance on the table.
 - **Harnesses beyond Hermes**: what the harness contract looks like once a second one arrives.
 - **Retention and pruning** of comb history.

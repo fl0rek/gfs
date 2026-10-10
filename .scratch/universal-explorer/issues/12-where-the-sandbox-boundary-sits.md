@@ -2,13 +2,12 @@
 
 Type: grilling
 Status: open
-Blocked by: 03
+Blocked by: 05, 13
 
 ## Question
 
-What is the isolation boundary around a Hermes session?
-- the VM itself, with Hermes on its `local` terminal backend inside it
-- Hermes running outside, with the VM as its terminal backend
-- something else
-
-The choice decides whether Hermes's state is inside or outside the runtime.
+With owned syscalls, the wasm runtime is the natural isolation boundary. What, if anything, crosses it?
+- Hermes's `local` terminal backend inside the world, versus a custom Universal Explorer backend plugin
+- network egress: Wisp relay in the browser, host sockets natively
+- secrets: `.env`, `auth.json`
+- offload

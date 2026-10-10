@@ -2,14 +2,12 @@
 
 Type: grilling
 Status: open
-Blocked by: 03, 04, 05
+Blocked by: 04, 05, 13
 
 ## Question
 
-Where does the code that records and serves datacombs run, given the performance bar and wasm parity?
-- host-side, served into the guest (virtiofs or vhost-user daemon)
-- in-guest userspace (FUSE)
-- in-guest kernel
-- a hybrid
+The harness's world is wasm with owned syscalls (see "Guest architecture and platform matrix"). Where does the gfs and datacombs engine sit in that, and how is it built?
+- inside the wasm runtime's syscall layer, implemented in Rust
+- as a separate process or worker the syscall layer talks to
 
-What runs in the browser's equivalent position?
+The answer must cover both hosts: native Wasmer embedding, and a Web Worker plus OPFS in the browser.
