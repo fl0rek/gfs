@@ -10,6 +10,14 @@ const app = document.getElementById("app")!;
 // ---------- state ----------
 let info: InitInfo | null = null;
 let transcript: any[] = [];
+// Direct shell commands ("!cmd"), kept in sessionStorage so they survive a reload.
+let shellLog: { time: number; command: string; output: string; exitCode: number | null; running?: boolean }[] = loadShellLog();
+function loadShellLog() {
+  try { return JSON.parse(sessionStorage.getItem("pi-on-gfs.shell") ?? "[]"); } catch { return []; }
+}
+function saveShellLog() {
+  try { sessionStorage.setItem("pi-on-gfs.shell", JSON.stringify(shellLog.slice(-200))); } catch {}
+}
 let streamingText = "";
 let streamingThinking = "";
 let busy = false;
@@ -127,6 +135,7 @@ async function selectEntry(id: string | null) {
 async function send(text: string) {
   if (!text.trim() || busy) return;
   error = null;
+  if (text.startsWith("!")) return runShell(text.slice(1).trim());
   busy = true;
   render();
   try {
@@ -136,6 +145,27 @@ async function send(text: string) {
     busy = false;
     render();
   }
+}
+
+/** `!cmd`: run in the WASIX shell directly. Changes land as an "external" entry attributed to you. */
+async function runShell(command: string) {
+  if (!command) return;
+  const item = { time: Date.now(), command, output: "", exitCode: null as number | null, running: true };
+  shellLog.push(item);
+  busy = true;
+  render();
+  try {
+    const r = await worker.call<{ output: string; exitCode: number }>({ method: "shellRun", command, timeoutMs: 120000 });
+    item.output = r.output;
+    item.exitCode = r.exitCode;
+  } catch (e: any) {
+    item.output = String(e.message ?? e);
+    item.exitCode = -1;
+  }
+  item.running = false;
+  busy = false;
+  saveShellLog();
+  render();
 }
 
 async function applyConfig() {
@@ -201,16 +231,20 @@ function render() {
 
 function renderConsole() {
   const msgs: Node[] = [];
+  const rows: { time: number; node: () => Node }[] = [];
   for (const m of transcript) {
     if (m.role === "system") continue;
-    msgs.push(renderMessage(m));
+    rows.push({ time: m.timestamp ?? 0, node: () => renderMessage(m) });
   }
+  for (const sh of shellLog) rows.push({ time: sh.time, node: () => renderShellItem(sh) });
+  rows.sort((a, b) => a.time - b.time);
+  for (const r of rows) msgs.push(r.node());
   if (streamingThinking) msgs.push(h("div", { class: "msg assistant thinking" }, h("details", { open: true }, h("summary", {}, "thinking…"), streamingThinking)));
   if (streamingText) msgs.push(h("div", { class: "msg assistant streaming" }, streamingText));
   if (busy && !streamingText) msgs.push(h("div", { class: "msg assistant muted" }, "…"));
 
   const input = h("textarea", {
-    placeholder: busy ? "pi is working…" : `Ask pi to do something in ${CWD}`,
+    placeholder: busy ? "working…" : `Ask pi to do something in ${CWD} — or !cmd to run it in the shell yourself`,
     rows: 3,
     disabled: busy,
     onKeydown: (e: KeyboardEvent) => {
@@ -274,6 +308,13 @@ function renderMessage(m: any): Node {
   return h("div", { class: "msg muted" }, m.role);
 }
 
+function renderShellItem(sh: { time: number; command: string; output: string; exitCode: number | null; running?: boolean }): Node {
+  return h("div", { class: `msg shell${sh.exitCode && sh.exitCode !== 0 ? " iserror" : ""}` },
+    h("div", { class: "cmd" }, h("span", { class: "prompt" }, "$ "), sh.command, sh.running ? h("span", { class: "spinner" }) : sh.exitCode ? h("span", { class: "muted" }, ` → exit ${sh.exitCode}`) : null),
+    sh.output ? h("pre", {}, sh.output) : null,
+  );
+}
+
 function summarizeArgs(name: string, a: any): string {
   if (!a) return "";
   if (name === "bash") return a.command ?? "";
@@ -305,7 +346,7 @@ function renderConfig() {
 }
 
 // ----- timeline -----
-interface Item { time: number; kind: "entry" | "prompt" | "assistant"; entry?: HistoryEntry; text?: string; }
+interface Item { time: number; kind: "entry" | "prompt" | "assistant" | "shell"; entry?: HistoryEntry; text?: string; }
 
 function timelineItems(): Item[] {
   const items: Item[] = [];
@@ -319,6 +360,7 @@ function timelineItems(): Item[] {
       }
     }
   }
+  if (selectedComb === WORKSPACE) for (const sh of shellLog) items.push({ time: sh.time, kind: "shell", text: `$ ${sh.command}` });
   items.sort((a, b) => a.time - b.time || (a.kind === "entry" ? 1 : -1));
   return items;
 }
@@ -344,6 +386,7 @@ function renderTimeline() {
 
 function renderItem(it: Item): Node {
   if (it.kind === "prompt") return h("div", { class: "item prompt" }, h("span", { class: "time" }, fmtTime(it.time)), h("span", { class: "who" }, "you"), h("span", { class: "text" }, it.text));
+  if (it.kind === "shell") return h("div", { class: "item shell" }, h("span", { class: "time" }, fmtTime(it.time)), h("span", { class: "who" }, "you · shell"), h("span", { class: "text mono" }, it.text));
   if (it.kind === "assistant") return h("div", { class: "item assistant" }, h("span", { class: "time" }, fmtTime(it.time)), h("span", { class: "who" }, "pi"), h("span", { class: "text" }, it.text));
   const e = it.entry!;
   const n = e.summary.added.length + e.summary.modified.length + e.summary.removed.length;

@@ -36,7 +36,44 @@ export interface Shell {
   warmup(): Promise<void>;
 }
 
-export type ShellSource = { kind: "registry"; name: string } | { kind: "module"; bytes: Uint8Array; command: string };
+/**
+ * Answer the Wasmer SDK's registry lookups from our own origin. The SDK resolves `use`
+ * dependencies by package name against https://registry.wasmer.io/graphql (not configurable
+ * in 0.19.1) and downloads from cdn.wasmer.io; with this shim installed, both come from
+ * `${base}packages/` instead, so the shell works offline and never depends on their CDN.
+ */
+export function installRegistryShim(base: URL, index: { packages: Record<string, string>; registry: Record<string, any> }) {
+  const realFetch = self.fetch.bind(self);
+  const shas = new Set(Object.values(index.packages));
+  const local = (sha: string) => new URL(`${sha}.webc`, base).href;
+  self.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url.startsWith("https://registry.wasmer.io/graphql")) {
+      const body = init?.body ?? (input instanceof Request ? await input.clone().text() : "");
+      const text = typeof body === "string" ? body : "";
+      const m = /getPackage\(name:\s*\\?"([^"\\]+)\\?"\)/.exec(text);
+      const recorded = m && index.registry[m[1]];
+      if (recorded) {
+        // The registry's full answer as recorded at build time, with downloads pointed at our origin.
+        const answer = JSON.parse(JSON.stringify(recorded));
+        for (const v of answer.data.getPackage.versions) {
+          for (const d of [v.v2, v.v3]) if (d?.piritaSha256Hash && shas.has(d.piritaSha256Hash)) d.piritaDownloadUrl = local(d.piritaSha256Hash);
+        }
+        return new Response(JSON.stringify(answer), { headers: { "content-type": "application/json" } });
+      }
+      console.warn("registry shim: no local answer for", text.slice(0, 120));
+    }
+    const cdn = /^https:\/\/cdn\.wasmer\.io\/webcimages\/([0-9a-f]{64})\.webc$/.exec(url);
+    if (cdn && shas.has(cdn[1])) return realFetch(local(cdn[1]), init);
+    return realFetch(input as any, init);
+  }) as typeof fetch;
+}
+
+export type ShellSource =
+  | { kind: "registry"; name: string }
+  /** .webc files served from our own origin, pinned by sha256 (see scripts/fetch-packages.mjs). First one is the shell. */
+  | { kind: "bundled"; urls: string[] }
+  | { kind: "module"; bytes: Uint8Array; command: string };
 
 const dec = new TextDecoder();
 
@@ -44,6 +81,7 @@ export class WasixShell implements Shell {
   private wasmer: Wasmer | null = null;
   private sandbox: Sandbox | null = null;
   private pkg: Package | null = null;
+  private extraPkgs: Package[] = [];
   private commandName = "bash";
   private ready: Promise<void> | null = null;
   /** What the sandbox's /workspace currently holds: path → blob hash. */
@@ -74,6 +112,21 @@ export class WasixShell implements Shell {
         },
       });
       this.commandName = this.pkg.entrypoint ?? "bash";
+    } else if (this.source.kind === "bundled") {
+      const pkgs: Package[] = [];
+      for (const url of this.source.urls) {
+        const short = url.split("/").pop()!.slice(0, 8);
+        this.status(`fetching ${short}… (bundled WASIX package)`, true);
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`${url}: ${res.status}`);
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        this.status(`loading ${short}…`, true);
+        pkgs.push(await this.wasmer.packages.load(bytes));
+      }
+      this.pkg = pkgs[0];
+      this.extraPkgs = pkgs.slice(1);
+      console.log("bundled packages:", pkgs.map((p) => `${p.id} [${p.commands.length} cmds]`).join(", "));
+      this.commandName = this.pkg.commands.includes("bash") ? "bash" : this.pkg.entrypoint ?? this.pkg.commands[0];
     } else {
       this.pkg = await this.wasmer.packages.create({
         modules: { app: this.source.bytes },
@@ -82,7 +135,8 @@ export class WasixShell implements Shell {
       this.commandName = this.source.command;
     }
     this.status("creating sandbox…", true);
-    this.sandbox = await this.wasmer.sandboxes.create({ packages: [this.pkg] });
+    // Dependencies first, so the shell's `use` edges resolve against what is already installed.
+    this.sandbox = await this.wasmer.sandboxes.create({ packages: [...this.extraPkgs, this.pkg] });
     await this.sandbox.fs.mkdir("/workspace", { recursive: true }).catch(() => {});
     this.mirrored.clear();
     this.status("shell ready", false);

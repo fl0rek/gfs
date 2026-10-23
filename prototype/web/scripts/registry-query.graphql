@@ -1,0 +1,25 @@
+{
+    getPackage(name: "wasmer/coreutils") {
+        packageName
+        namespace
+        versions {
+          version
+          isArchived
+          v2: distribution(version: V2) {
+            piritaDownloadUrl
+            piritaSha256Hash
+            webcManifest
+            webcSize
+          }
+          v3: distribution(version: V3) {
+            piritaDownloadUrl
+            piritaSha256Hash
+            webcManifest
+            webcSize
+          }
+        }
+    }
+    info {
+        defaultFrontend
+    }
+}

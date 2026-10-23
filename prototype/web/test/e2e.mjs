@@ -110,6 +110,19 @@ check(userTexts.some((t) => /rolled workspace back/.test(t)), "the model was tol
 const log4 = await call({ method: "log", comb: "workspace" });
 check(log4.length > log3.length, `more entries after second prompt: ${log4.length}`);
 
+// 5. "!" passthrough: a direct shell command, recorded as an external entry
+if (shellArg !== "none") {
+  await page.type("textarea", "!echo manual > by-hand.txt && ls");
+  await page.keyboard.press("Enter");
+  await until(async () => (await state()).busy, "shell start", 10000);
+  await until(async () => !(await state()).busy, "shell end");
+  const log5 = await call({ method: "log", comb: "workspace" });
+  check(log5[0].kind === "external" && log5[0].author.harness === "shell", `"!" command became an external entry by the shell (${log5[0].kind}/${log5[0].author.harness})`);
+  check(log5[0].summary.added.includes("by-hand.txt"), "external entry added by-hand.txt");
+  const shown = await page.$$eval(".msg.shell pre", (els) => els.map((e) => e.textContent));
+  check(shown.some((t) => /by-hand\.txt/.test(t)), "shell output is shown in the console");
+}
+
 await page.screenshot({ path: process.env.SHOT ?? "e2e.png", fullPage: true });
 await browser.close();
 console.log(failures ? `\n${failures} FAILED` : "\nall checks passed");

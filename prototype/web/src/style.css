@@ -57,6 +57,13 @@ main.split { flex: 1; display: grid; grid-template-columns: minmax(360px, 1fr) m
 .msg { border-radius: 10px; padding: 8px 12px; max-width: 95%; white-space: pre-wrap; }
 .msg.user { align-self: flex-end; background: var(--accent); color: #0b1016; }
 .msg.assistant { align-self: flex-start; background: var(--panel-2); }
+.msg.shell { align-self: stretch; max-width: 100%; background: #0d1117; color: #d7dee7; font-family: var(--mono); font-size: 12px; border: 1px solid var(--line); }
+.msg.shell.iserror { border-color: var(--err); }
+.msg.shell .cmd { color: var(--ok); display: flex; gap: 6px; align-items: center; }
+.msg.shell .prompt { color: var(--muted); }
+.msg.shell pre { margin-top: 6px; max-height: 320px; overflow: auto; }
+@media (prefers-color-scheme: light) { .msg.shell { background: #1b2129; } }
+.item.shell .text { color: var(--ok); }
 .msg.note { align-self: center; color: var(--warn); font-size: 12px; background: transparent; border: 1px dashed var(--warn); }
 .msg.assistant .text + .text { margin-top: 6px; }
 .msg.toolresult { align-self: flex-start; background: transparent; border: 1px dashed var(--line); font-size: 12px; max-width: 95%; }

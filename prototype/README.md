@@ -6,7 +6,8 @@ What it is:
 
 - **pi** (`@earendil-works/pi-agent-core` + `pi-ai`) runs in a **Web Worker**. Its four tools (`read`, `write`, `edit`, `bash`) are reimplemented over gfs with pi's own schemas, so a real model sees the tools it knows.
 - **gfs** is a Rust crate compiled to wasm (`gfs-core/`): content-addressed objects (BLAKE3), trees, and a hash-chained history per comb. Every tool call that changes a comb becomes **one history entry** attributed to that call (tool name, call id, turn, args stored by hash, author = the session, committer = the node). Rollback appends an entry; nothing is rewritten. The chain can be verified.
-- **bash is real**: `wasmer/bash` (WASIX) via the Wasmer JS SDK, inside the same worker. Its `/workspace` is synced from the comb before each command and back into it after, so a shell command is a tool call like any other.
+- **bash is real**: `wasmer/bash` (WASIX) via the Wasmer JS SDK, inside the same worker. Its `/workspace` is synced from the comb before each command and back into it after, so a shell command is a tool call like any other. The `.webc` packages are fetched at build time, pinned by sha256, and served from our own origin; a small `fetch` shim answers the SDK's registry lookups locally, so the hosted site never talks to wasmer.io.
+- **`!cmd`** in the console runs in that same shell directly, as you. Changes land as an `external` entry (author: you at the shell), distinct from pi's tool calls.
 - **Persistence** is OPFS: every object and ref is written as it is created and loaded back on start. Reload the tab; the history, the files and the conversation are still there.
 - **The conversation is itself a comb** (`/datacombs/session`): the transcript is committed once per turn, so "what was said" and "what changed" live in the same kind of history.
 - Two views: pi's console, and the timeline of a comb from genesis to now, with the conversation interleaved, per-entry diffs, the tool-call arguments, the tree at any point (`/datacombs/<comb>@<entry>`), rollback and chain verification.
@@ -28,13 +29,14 @@ The dev server sends COOP/COEP headers (the WASIX runtime needs `SharedArrayBuff
 
 Models: **mock** (default) is a scripted agent that writes, runs bash, edits and answers, so everything works offline. **DeepSeek** and **OpenCode Zen** are wired through pi-ai; paste a key in the console (kept in `sessionStorage`, sent straight to the provider from the worker; CORS is the provider's decision). "openai-compatible" takes any base URL.
 
-Tests: `cargo test` in `gfs-core/`; `node test/e2e.mjs` drives the built page in headless Chromium (`CHROME=/path/to/chromium`, with `pnpm build && pnpm preview` running) through a prompt, rollback, reload and verification. `--shell=none` skips the WASIX shell.
+Tests: `cargo test` in `gfs-core/`; `node test/e2e.mjs` drives the built page in headless Chromium (`CHROME=/path/to/chromium`, with `pnpm build && pnpm preview` running) through a prompt, rollback, reload, verification and a `!` command. `--shell=none` skips the WASIX shell; `test/offline.mjs` proves the shell runs with wasmer.io blocked.
 
 ## What this prototype says
 
 - pi's core packages are pure fetch-based TypeScript and run in a worker unchanged. Only the tools and the "session" wrapper are Node-bound. pi was the right pivot from Hermes for a browser-first prototype.
 - One entry per tool call falls out naturally when the harness's tools are ours: the tool wrapper commits after each call, and `turn_id` comes from pi's `turn_start` event. No hook into the harness was needed.
 - The WASIX shell works in a nested worker, but the Wasmer SDK must not be bundled (it spawns its pool from `import.meta.url`); it is copied verbatim and loaded at runtime.
+- The Wasmer SDK resolves a package's dependencies by name against its registry (URL baked into the wasm core, 0.19.1), so shipping the `.webc` bytes alone is not enough; replaying the registry's recorded answer from our origin is. Wasmer's coreutils package has no grep/sed/awk/find; the system prompt says so.
 - The shell's filesystem is a mirror, not a mount: the SDK has no public custom-filesystem hook (there is an experimental host-filesystem RPC bridge used by their iOS prototype). The mirror is correct at tool-call granularity, which is the granularity history already has.
 - Timeline + diff + "browse at @entry" + rollback-as-new-entry reads naturally; the conversation interleaved with entries is what makes "who changed what and why" legible.
 

@@ -11,7 +11,7 @@ import { opencodeProvider } from "@earendil-works/pi-ai/providers/opencode";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { Datacombs } from "./gfs";
 import { makeTools } from "./tools";
-import { WasixShell, UnavailableShell, type Shell } from "./shell";
+import { WasixShell, UnavailableShell, installRegistryShim, type Shell } from "./shell";
 import { createMockProvider, MOCK_MODEL_ID, MOCK_PROVIDER_ID } from "./mock-model";
 import { CWD, WORKSPACE } from "./paths";
 import type { Author, EntryDetail, InitInfo, ModelConfig, Notification, Reply, Request } from "./protocol";
@@ -58,8 +58,15 @@ async function init(shellParam?: string): Promise<InitInfo> {
     const [url, command] = shellParam.slice("module:".length).split(",");
     const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
     shell = new WasixShell(dc, { kind: "module", bytes, command: command || "sh" }, status);
-  } else {
+  } else if (shellParam === "registry") {
     shell = new WasixShell(dc, { kind: "registry", name: BASH_PACKAGE }, status);
+  } else {
+    // Default: the pinned .webc files served from our own origin (fetched at build time).
+    const base = new URL(`${import.meta.env.BASE_URL}packages/`, self.location.href);
+    const index = await (await fetch(new URL("index.json", base))).json();
+    installRegistryShim(base, index);
+    const urls = Object.values(index.packages as Record<string, string>).map((sha) => new URL(`${sha}.webc`, base).href);
+    shell = new WasixShell(dc, { kind: "bundled", urls }, status);
   }
 
   buildAgent(restoreTranscript());
@@ -107,7 +114,7 @@ function systemPrompt() {
     "</rules>",
     "",
     "<environment>",
-    `Your working directory is ${CWD}. It is a comb: a versioned directory whose every tool call becomes one history entry. The past is readable at ${CWD}@<entry-id>/<path>. Nothing outside /datacombs exists. bash runs in a WASIX sandbox over the same directory; its network is disabled.`,
+    `Your working directory is ${CWD}. It is a comb: a versioned directory whose every tool call becomes one history entry. The past is readable at ${CWD}@<entry-id>/<path>. Nothing outside /datacombs exists. bash runs in a WASIX sandbox over the same directory (GNU bash + coreutils: ls, cat, head, tail, wc, sort, cut, tr, date, mkdir, cp, mv, rm…; no grep, sed, awk, find or git). Its network is disabled. Prefer the read tool over cat.`,
     "</environment>",
     "",
     `<cwd>${CWD}</cwd>`,
@@ -275,9 +282,16 @@ async function handle(req: Request): Promise<unknown> {
       await shell.warmup();
       return null;
     case "shellRun": {
-      // Direct shell access from the page (debugging). Changes land as an "external" entry.
-      const res = await shell.run(WORKSPACE, req.command, { cwd: CWD, timeoutMs: req.timeoutMs, onData: (c) => post({ type: "status", text: c.slice(0, 80) }) });
-      const id = await dc.commit(WORKSPACE, { kind: "external" }, { ...author(), harness: "shell", model: "" });
+      // "!cmd" from the console: the user at the shell, outside any tool call. Changes land as an "external" entry.
+      if (agent?.state.isStreaming) throw new Error("wait for the agent to finish");
+      status(`$ ${req.command}`, true);
+      let res;
+      try {
+        res = await shell.run(WORKSPACE, req.command, { cwd: CWD, timeoutMs: req.timeoutMs });
+      } finally {
+        status("shell ready", false);
+      }
+      const id = await dc.commit(WORKSPACE, { kind: "external" }, { session: sessionId, harness: "shell", model: "", principal: "user" });
       if (id) post({ type: "history", comb: WORKSPACE, objectCount: dc.objectCount() });
       return res;
     }

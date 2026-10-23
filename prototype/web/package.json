@@ -6,6 +6,8 @@
   "description": "PROTOTYPE: pi coding agent in a Web Worker on a gfs-backed filesystem. Throwaway.",
   "scripts": {
     "dev": "vite",
+    "prebuild": "node scripts/fetch-packages.mjs",
+    "predev": "node scripts/fetch-packages.mjs",
     "build": "vite build",
     "preview": "vite preview",
     "check": "tsc --noEmit"
