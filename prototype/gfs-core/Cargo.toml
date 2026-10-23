@@ -1,0 +1,25 @@
+[package]
+name = "gfs-core"
+version = "0.0.0"
+edition = "2021"
+description = "PROTOTYPE: content-addressed, hash-chained comb store for Universal Explorer. Throwaway."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2.129"
+js-sys = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+blake3 = { version = "1", default-features = false }
+similar = "2"
+hex = "0.4"
+thiserror = "2"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
