@@ -1,0 +1,58 @@
+# PROTOTYPE. Builds prototype/ and publishes it to GitHub Pages.
+name: prototype-pages
+
+on:
+  push:
+    branches: [prototype/pi-on-gfs]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: prototype/gfs-core
+      - name: Install wasm-bindgen-cli
+        run: cargo install wasm-bindgen-cli --version 0.2.129 --locked
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: prototype/web/pnpm-lock.yaml
+      - name: Build gfs-core to wasm
+        run: ./prototype/build-wasm.sh
+      - name: Build the web app
+        working-directory: prototype/web
+        run: |
+          pnpm install --frozen-lockfile
+          BASE_PATH=/gfs/ pnpm build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: prototype/web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
