@@ -38,6 +38,11 @@ export class AgentWorker {
     });
   }
 
+  /** Send something outside the request/reply protocol (bridge events). */
+  raw(msg: unknown) {
+    this.worker.postMessage(msg);
+  }
+
   on(l: Listener) {
     this.listeners.add(l);
     return () => this.listeners.delete(l);

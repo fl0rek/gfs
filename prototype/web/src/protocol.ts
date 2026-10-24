@@ -64,7 +64,16 @@ export type Request =
   | { id: number; method: "transcript" }
   | { id: number; method: "shellWarmup" }
   | { id: number; method: "shellRun"; command: string; timeoutMs?: number }
-  | { id: number; method: "wipe" };
+  | { id: number; method: "wipe" }
+  | { id: number; method: "bridgeAvailable"; available: boolean }
+  | { id: number; method: "debugFetch"; url: string };
+
+/** Page → worker, outside the RPC: a response event from the egress bridge. */
+export interface BridgeInbound {
+  bridge: true;
+  id: number;
+  event: import("./egress").BridgeEvent;
+}
 
 export interface EntryDetail {
   entry: HistoryEntry;
@@ -87,6 +96,7 @@ export type Notification =
   | { type: "agent"; event: unknown } // slimmed pi-agent-core AgentEvent
   | { type: "history"; comb: string; objectCount: number } // the comb's history changed
   | { type: "status"; text: string; busy?: boolean }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | { type: "bridge"; reqId: number; req: import("./egress").BridgeRequest | null }; // null = abort
 
 export type Reply = { id: number; ok: true; result: unknown } | { id: number; ok: false; error: string };

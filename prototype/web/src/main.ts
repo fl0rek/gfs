@@ -67,9 +67,30 @@ const fmtTime = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-dig
 const textOf = (m: any) =>
   typeof m.content === "string" ? m.content : (m.content ?? []).filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n");
 
+// ---------- egress bridge (extension) ----------
+let bridgeVersion: string | null = null;
+window.addEventListener("message", (ev) => {
+  if (ev.source !== window || !ev.data || ev.data.source !== "gfs-bridge-ext") return;
+  const m = ev.data;
+  if (m.event === "hello") {
+    if (!bridgeVersion) {
+      bridgeVersion = m.version;
+      void worker.call({ method: "bridgeAvailable", available: true });
+      render();
+    }
+    return;
+  }
+  const { id, source: _s, ...event } = m;
+  worker.raw({ bridge: true, id, event });
+});
+window.postMessage({ source: "gfs-bridge", type: "ping" }, "*");
+
 // ---------- worker events ----------
 worker.on(async (n) => {
-  if (n.type === "status") {
+  if (n.type === "bridge") {
+    if (n.req) window.postMessage({ source: "gfs-bridge", type: "fetch", id: n.reqId, url: n.req.url, init: n.req.init }, "*");
+    else window.postMessage({ source: "gfs-bridge", type: "abort", id: n.reqId }, "*");
+  } else if (n.type === "status") {
     statusText = n.text;
     render();
   } else if (n.type === "error") {
@@ -222,6 +243,7 @@ function render() {
         busy || statusText.endsWith("…") ? h("span", { class: "spinner" }) : null,
         h("span", {}, statusText),
         info ? h("span", { class: "muted" }, ` · ${info.persistence === "opfs" ? "persisted in OPFS" : "memory only"} · ${info.objectCount} objects`) : null,
+        h("span", { class: "muted", title: bridgeVersion ? `egress extension v${bridgeVersion}: any URL` : "no egress extension: CORS applies" }, ` · egress: ${bridgeVersion ? "extension" : "direct only"}`),
       ),
     ),
     error ? h("div", { class: "error" }, error, h("button", { class: "link", onClick: () => { error = null; render(); } }, "dismiss")) : null,
@@ -472,4 +494,4 @@ render();
 })();
 
 // Exposed for the headless test driver.
-(window as any).__pi = { worker, state: () => ({ info, transcript, logs, busy, error, statusText }) };
+(window as any).__pi = { worker, state: () => ({ info, transcript, logs, busy, error, statusText, bridgeVersion }) };

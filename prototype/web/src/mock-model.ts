@@ -57,9 +57,14 @@ function script(context: TranscriptContext) {
         }),
       ]);
     }
+    case 3:
+      return fauxAssistantMessage([
+        fauxText("Let me also check something on the web."),
+        fauxToolCall("fetch", { url: "https://api.github.com/repos/fl0rek/gfs" }),
+      ]);
     default:
       return fauxAssistantMessage(
-        `Done. I wrote \`${file}\`, listed the workspace${lastResult?.isError ? " (bash was unavailable)" : " and appended to log.txt with bash"}, and edited the file. Each of those tool calls is one entry in the comb's history; open the timeline to see them.`,
+        `Done. I wrote \`${file}\`, listed the workspace with bash, edited the file, and fetched the repo's metadata${lastResult?.isError ? " (the fetch was blocked)" : ` (${/"stargazers_count":\s*(\d+)/.exec(contentToText(lastResult) ?? "")?.[1] ?? "?"} stars)`}. Each tool call that changed a file is one entry in the comb's history; the fetch changed nothing, so it left no entry.`,
       );
   }
 }

@@ -14,7 +14,8 @@ import { makeTools } from "./tools";
 import { WasixShell, UnavailableShell, installRegistryShim, type Shell } from "./shell";
 import { createMockProvider, MOCK_MODEL_ID, MOCK_PROVIDER_ID } from "./mock-model";
 import { CWD, WORKSPACE } from "./paths";
-import type { Author, EntryDetail, InitInfo, ModelConfig, Notification, Reply, Request } from "./protocol";
+import type { Author, BridgeInbound, EntryDetail, InitInfo, ModelConfig, Notification, Reply, Request } from "./protocol";
+import { installBridge, onBridgeEvent, setBridgeAvailable, smartFetch, egressMode } from "./egress";
 
 const NODE = "browser-node";
 const SESSION_COMB = "session";
@@ -31,6 +32,7 @@ let currentTurnId = "";
 const mock = createMockProvider();
 
 const post = (n: Notification) => self.postMessage(n);
+installBridge({ send: (id, req) => post({ type: "bridge", reqId: id, req }) });
 const status = (text: string, busy?: boolean) => post({ type: "status", text, busy });
 
 function author(): Author {
@@ -158,13 +160,15 @@ function buildAgent(messages: AgentMessage[]) {
   const tools = makeTools({
     dc,
     shell,
+    fetch: smartFetch,
     author,
     turnId,
     onEntry: (comb) => post({ type: "history", comb, objectCount: dc.objectCount() }),
   });
   agent = new Agent({
     initialState: { systemPrompt: systemPrompt(), model: currentModel(), tools, messages },
-    streamFn: (model, context, options) => models.streamSimple(model, context, { ...options, apiKey: config.apiKey || undefined }),
+    streamFn: (model, context, options) =>
+      models.streamSimple(model, context, { ...options, apiKey: config.apiKey || undefined, fetch: smartFetch }),
     getApiKey: () => config.apiKey || undefined,
     toolExecution: "sequential",
     sessionId,
@@ -298,11 +302,28 @@ async function handle(req: Request): Promise<unknown> {
     case "wipe":
       await dc.wipe();
       return null;
+    case "debugFetch": {
+      try {
+        const r = await smartFetch(req.url);
+        return { ok: true, status: r.status, text: (await r.text()).slice(0, 2000) };
+      } catch (e: any) {
+        return { ok: false, error: String(e?.message ?? e) };
+      }
+    }
+    case "bridgeAvailable":
+      setBridgeAvailable(req.available);
+      status(`egress: ${egressMode()}`);
+      return null;
   }
 }
 
-self.onmessage = async (e: MessageEvent<Request>) => {
-  const req = e.data;
+self.onmessage = async (e: MessageEvent<Request | BridgeInbound>) => {
+  if ((e.data as BridgeInbound).bridge) {
+    const b = e.data as BridgeInbound;
+    onBridgeEvent(b.id, b.event);
+    return;
+  }
+  const req = e.data as Request;
   let reply: Reply;
   try {
     reply = { id: req.id, ok: true, result: await handle(req) };

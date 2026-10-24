@@ -16,6 +16,7 @@ const DEFAULT_MAX_BYTES = 50 * 1024;
 export interface ToolContext {
   dc: Datacombs;
   shell: Shell;
+  fetch: typeof fetch;
   author: () => Author;
   turnId: () => string;
   /** Called after a tool call produced a history entry. */
@@ -268,7 +269,37 @@ export function makeTools(ctx: ToolContext): AgentTool<any, any>[] {
     },
   };
 
-  return [read, write, edit, bash].map((t) => recorded(ctx, t));
+  const fetchTool: AgentTool<any, any> = {
+    name: "fetch",
+    label: "fetch",
+    description:
+      "Fetch a URL over HTTP(S) and return the response body as text (HTML is reduced to its text). Output is truncated to 2000 lines or 50KB. The browser's CORS rules apply unless the egress extension is installed; a blocked request says so.",
+    parameters: Type.Object({
+      url: Type.String({ description: "Absolute http(s) URL" }),
+      method: Type.Optional(Type.String({ description: "HTTP method (default GET)" })),
+      headers: Type.Optional(Type.Record(Type.String(), Type.String(), { description: "Extra request headers" })),
+      body: Type.Optional(Type.String({ description: "Request body for POST/PUT" })),
+    }),
+    constrainedSampling: { type: "json_schema", strict: "prefer" },
+    async execute(_id, params: any, signal) {
+      const { url, method, headers, body } = params;
+      if (!/^https?:\/\//.test(url)) throw new Error("only http(s) URLs");
+      let res: Response;
+      try {
+        res = await ctx.fetch(url, { method: method ?? "GET", headers, body, signal });
+      } catch (e: any) {
+        throw new Error(`${url}: ${e.message}. From a browser this usually means the site sends no CORS headers; install the egress extension (prototype/extension) to fetch anything.`);
+      }
+      const ctype = res.headers.get("content-type") ?? "";
+      let t = await res.text();
+      if (/text\/html/.test(ctype)) t = htmlToText(t);
+      const { text: out, truncated } = truncateHead(t);
+      const head = `HTTP ${res.status}${ctype ? ` · ${ctype.split(";")[0]}` : ""}\n\n`;
+      return { content: [{ type: "text", text: head + out }], details: { status: res.status, truncated }, isError: res.status >= 400 };
+    },
+  };
+
+  return [...[read, write, edit, bash].map((t) => recorded(ctx, t)), fetchTool];
 }
 
 function normalizeFuzzy(s: string): { text: string; map: number[] } {
@@ -297,6 +328,42 @@ function normalizeFuzzy(s: string): { text: string; map: number[] } {
     }
   }
   return { text, map };
+}
+
+function truncateHead(s: string): { text: string; truncated: boolean } {
+  const lines = s.split("\n");
+  let out: string[] = [];
+  let bytes = 0;
+  let truncated = false;
+  for (const l of lines) {
+    if (out.length >= DEFAULT_MAX_LINES || bytes + l.length + 1 > DEFAULT_MAX_BYTES) {
+      truncated = true;
+      break;
+    }
+    out.push(l);
+    bytes += l.length + 1;
+  }
+  let text = out.join("\n");
+  if (truncated) text += `\n\n[truncated: showing ${out.length} of ${lines.length} lines]`;
+  return { text, truncated };
+}
+
+function htmlToText(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<\/(p|div|br|li|h[1-6]|tr|section|article|header|footer|blockquote|pre)>/gi, "\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function truncateTail(s: string): { text: string; truncated: boolean } {
