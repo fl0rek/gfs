@@ -15,7 +15,8 @@ const DEFAULT_MAX_BYTES = 50 * 1024;
 
 export interface ToolContext {
   dc: Datacombs;
-  shell: Shell;
+  /** The current shell (it changes on a system switch); resolves once any boot in progress is over. */
+  shell: () => Promise<Shell>;
   fetch: typeof fetch;
   /** /proc reader */
   proc: (path: string) => string;
@@ -256,7 +257,8 @@ export function makeTools(ctx: ToolContext): AgentTool<any, any>[] {
     async execute(_id, params: any, signal, onUpdate) {
       const { command, timeout } = params;
       const t0 = performance.now();
-      const res = await ctx.shell.run(WORKSPACE, command, {
+      const sh = await ctx.shell();
+      const res = await sh.run(WORKSPACE, command, {
         timeoutMs: timeout ? timeout * 1000 : undefined,
         signal,
         onData: (chunk) => onUpdate?.({ content: [{ type: "text", text: chunk }], details: undefined }),

@@ -33,6 +33,42 @@ const startedAt = Date.now();
 /** The system the shell is running: the /nix comb's machine.json as of the entry it was switched at. */
 let runningSystem: { manifest: SystemManifest; entry: string; switchedAt: number } | null = null;
 let shellOrigin: URL = new URL(import.meta.env.BASE_URL, self.location.href);
+let pendingBoot = false;
+
+/** Why the shell cannot run here, if it cannot. Checked before trying, so phones get an answer, not a hang. */
+function shellBlocker(): string | null {
+  if (typeof SharedArrayBuffer === "undefined" || !(self as any).crossOriginIsolated)
+    return "no SharedArrayBuffer: the page is not cross-origin isolated (the COOP/COEP service worker did not take effect; reload once, or this browser blocks it)";
+  return null;
+}
+
+let bootInProgress: Promise<void> | null = null;
+function bootSystem(): Promise<void> {
+  if (!bootInProgress) bootInProgress = bootSystemOnce().finally(() => (bootInProgress = null));
+  return bootInProgress;
+}
+async function currentShell(): Promise<Shell> {
+  if (pendingBoot || bootInProgress) await bootSystem();
+  return shell;
+}
+async function bootSystemOnce() {
+  if (!pendingBoot) return;
+  pendingBoot = false;
+  const why = shellBlocker();
+  if (why) {
+    shell = new UnavailableShell(why);
+    if (agent) agent.state.tools = makeToolsFor();
+    status(`shell unavailable: ${why}`, false);
+    post({ type: "system", entry: dc.head(NIX_COMB), name: "(shell unavailable)", reason: why });
+    return;
+  }
+  const watchdog = setTimeout(() => status("the system is taking long to start (18 MB of wasm; slow network or device?)…", true), 20000);
+  try {
+    await switchSystem("boot");
+  } finally {
+    clearTimeout(watchdog);
+  }
+}
 const mock = createMockProvider();
 
 const post = (n: Notification) => self.postMessage(n);
@@ -91,7 +127,8 @@ async function init(shellParam?: string): Promise<InitInfo> {
       );
       await dc.commit(NIX_COMB, { kind: "external" }, { session: sessionId, harness: "system", model: "", principal: "user" });
     }
-    await switchSystem("boot");
+    // Don't block the page on 18 MB of wasm: the system comes up after init returns.
+    pendingBoot = true;
   }
 
   buildAgent(restoreTranscript());
@@ -131,6 +168,10 @@ async function switchSystem(reason: string): Promise<boolean> {
     status(`switch refused: ${e.message}`, false);
     post({ type: "error", message: `switch to /nix@${head.slice(0, 8)} refused: ${e.message}` });
     await next.close();
+    if (!runningSystem) {
+      shell = new UnavailableShell(`the system failed to start: ${e.message}`);
+      if (agent) agent.state.tools = makeToolsFor();
+    }
     return false;
   }
   const old = shell;
@@ -153,7 +194,7 @@ function procEntries(): Record<string, () => string> {
     "combs": () => dc.listCombs().map((c) => `${c}\t${dc.head(c)}`).join("\n") + "\n",
     "system": () =>
       j(runningSystem ? { entry: runningSystem.entry, path: `/nix@${runningSystem.entry}`, switched: new Date(runningSystem.switchedAt).toISOString(), name: runningSystem.manifest.name ?? null, shell: runningSystem.manifest.shell, packages: runningSystem.manifest.packages.map((p) => `${p.name} ${p.sha256.slice(0, 12)}`) } : { entry: null, note: "no system (shell disabled or not switched yet)" }),
-    "shell": () => j({ ready: shell instanceof WasixShell, commands: shell.commands() }),
+    "shell": () => j({ ready: shell instanceof WasixShell, booting: !!(pendingBoot || bootInProgress), commands: shell.commands() }),
     "egress": () => egressMode() + "\n",
     "mounts": () => ["/datacombs\tdatacombs\trw", "/nix\tcomb nix\trw (commit = switch)", "/proc\tproc\tro"].join("\n") + "\n",
     "uptime": () => `${Math.round((Date.now() - startedAt) / 1000)}\n`,
@@ -246,7 +287,7 @@ function currentModel(): Model<any> {
 function makeToolsFor() {
   return makeTools({
     dc,
-    shell,
+    shell: currentShell,
     fetch: smartFetch,
     proc: procRead,
     author,
@@ -379,7 +420,10 @@ async function handle(req: Request): Promise<unknown> {
     case "transcript":
       return agent?.state.messages ?? [];
     case "shellWarmup":
-      await shell.warmup();
+      await (await currentShell()).warmup();
+      return null;
+    case "boot":
+      void bootSystem();
       return null;
     case "shellRun": {
       // "!cmd" from the console: the user at the shell, outside any tool call. Changes land as an "external" entry.
@@ -387,7 +431,7 @@ async function handle(req: Request): Promise<unknown> {
       status(`$ ${req.command}`, true);
       let res;
       try {
-        res = await shell.run(WORKSPACE, req.command, { cwd: CWD, timeoutMs: req.timeoutMs });
+        res = await (await currentShell()).run(WORKSPACE, req.command, { cwd: CWD, timeoutMs: req.timeoutMs });
       } finally {
         status("shell ready", false);
       }

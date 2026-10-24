@@ -63,6 +63,7 @@ export type Request =
   | { id: number; method: "rollback"; comb: string; entryId: string }
   | { id: number; method: "transcript" }
   | { id: number; method: "shellWarmup" }
+  | { id: number; method: "boot" } // start the system (after init returned)
   | { id: number; method: "shellRun"; command: string; timeoutMs?: number }
   | { id: number; method: "wipe" }
   | { id: number; method: "bridgeAvailable"; available: boolean }

@@ -8,7 +8,7 @@ let failures = 0;
 const check = (c, m) => { console.log(`${c ? "ok " : "FAIL"} ${m}`); if (!c) failures++; };
 const call = (req) => page.evaluate((r) => window.__pi.worker.call(r), req);
 await page.goto("http://localhost:4173/", { waitUntil: "load" });
-await page.waitForFunction(() => window.__pi.state().info !== null, { timeout: 90000 });
+await page.waitForFunction(() => window.__pi.state().info?.system || /unavailable|refused|failed/.test(window.__pi.state().statusText), { timeout: 180000 });
 await page.select(".pane.timeline select", "nix");
 await new Promise((r) => setTimeout(r, 300));
 await page.evaluate(() => [...document.querySelectorAll(".pane.timeline button")].find((b) => b.textContent === "Files").click());

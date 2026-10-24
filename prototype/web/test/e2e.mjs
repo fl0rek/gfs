@@ -38,6 +38,7 @@ const until = async (pred, label, ms = 120000) => {
 console.log("open", url);
 await page.goto(url, { waitUntil: "load" });
 await until(async () => (await state()).info !== null || (await state()).error, "worker init");
+if (shellArg !== "none") await until(async () => (await state()).info?.system || /unavailable|refused|failed/.test((await state()).statusText), "system boot", 180000);
 let s = await state();
 check(s.info && !s.error, `worker initialised (${s.error ?? "no error"})`);
 check(await page.evaluate(() => crossOriginIsolated), "page is cross-origin isolated");
@@ -97,6 +98,7 @@ check(!fileNow.includes("then edited in place"), "file content is the pre-edit v
 // 3. reload: everything must come back from OPFS
 await page.reload({ waitUntil: "load" });
 await until(async () => (await state()).info !== null || (await state()).error, "worker re-init");
+if (shellArg !== "none") await until(async () => (await state()).info?.system, "system re-boot", 180000);
 s = await state();
 check(s.info && s.info.objectCount > objectsBefore, `objects persisted across reload: ${s.info.objectCount}`);
 const log3 = await call({ method: "log", comb: "workspace" });

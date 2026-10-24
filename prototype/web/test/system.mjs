@@ -10,7 +10,7 @@ const tool = (name, params) => call({ method: "debugTool", name, params });
 const text = (r) => r.content.map((c) => c.text).join("");
 
 await page.goto("http://localhost:4173/", { waitUntil: "load" });
-await page.waitForFunction(() => window.__pi.state().info !== null, { timeout: 90000 });
+await page.waitForFunction(() => window.__pi.state().info?.system || /unavailable|refused|failed/.test(window.__pi.state().statusText), { timeout: 180000 });
 let st = await page.evaluate(() => window.__pi.state());
 check(st.info.combs.includes("nix"), `combs: ${st.info.combs.join(", ")}`);
 check(st.info.system?.entry, `running system is /nix@${st.info.system?.entry?.slice(0, 8)}`);
@@ -73,7 +73,7 @@ check(sys3.name === "renamed system" && st.info.system.entry === after3[0].id, `
 
 // 4. reload: the system comes back from the comb
 await page.reload({ waitUntil: "load" });
-await page.waitForFunction(() => window.__pi.state().info !== null, { timeout: 90000 });
+await page.waitForFunction(() => window.__pi.state().info?.system || /unavailable|refused|failed/.test(window.__pi.state().statusText), { timeout: 180000 });
 st = await page.evaluate(() => window.__pi.state());
 check(st.info.system.entry === after3[0].id, "after reload the running system is the comb's head");
 

@@ -268,7 +268,24 @@ async function wipe() {
 }
 
 // ---------- rendering ----------
+let draft = ""; // the prompt box survives re-renders
+
 function render() {
+  // Keep focus and caret across the full re-render (status updates arrive while you type).
+  const active = document.activeElement as HTMLElement | null;
+  const key = active?.dataset?.key;
+  const sel = active && "selectionStart" in active ? [(active as HTMLTextAreaElement).selectionStart, (active as HTMLTextAreaElement).selectionEnd] : null;
+  renderInner();
+  if (key) {
+    const el = app.querySelector<HTMLElement>(`[data-key="${key}"]`);
+    if (el) {
+      el.focus({ preventScroll: true });
+      if (sel && "setSelectionRange" in el) (el as HTMLTextAreaElement).setSelectionRange(sel[0]!, sel[1]!);
+    }
+  }
+}
+
+function renderInner() {
   app.replaceChildren(h("div", { class: "root" },
     h("header", { class: "top" },
       h("div", { class: "brand" }, h("b", {}, "pi on gfs"), h("span", { class: "muted" }, " · prototype, throwaway")),
@@ -301,14 +318,18 @@ function renderConsole() {
   if (busy && !streamingText) msgs.push(h("div", { class: "msg assistant muted" }, "…"));
 
   const input = h("textarea", {
+    "data-key": "prompt",
     placeholder: busy ? "working…" : `Ask pi to do something in ${CWD} — or !cmd to run it in the shell yourself`,
     rows: 3,
     disabled: busy,
+    value: draft,
+    onInput: (e: any) => (draft = e.target.value),
     onKeydown: (e: KeyboardEvent) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         const t = (e.target as HTMLTextAreaElement).value;
         (e.target as HTMLTextAreaElement).value = "";
+        draft = "";
         void send(t);
       }
     },
@@ -326,7 +347,7 @@ function renderConsole() {
     h("div", { class: "composer" },
       input,
       h("div", { class: "row" },
-        h("button", { class: "primary", disabled: busy, onClick: () => { void send(input.value); input.value = ""; } }, "Send"),
+        h("button", { class: "primary", disabled: busy, onClick: () => { void send(input.value); input.value = ""; draft = ""; } }, "Send"),
         busy ? h("button", { onClick: () => worker.call({ method: "abort" }) }, "Abort") : null,
       ),
     ),
@@ -511,7 +532,7 @@ function renderFiles(): Node {
       fv.open ? h("div", { class: "editor" },
         h("div", { class: "row" }, h("span", { class: "mono" }, fv.open.path), fv.open.dirty ? h("span", { class: "warn" }, " · modified") : null, h("span", { class: "grow" }),
           h("button", { class: "primary", disabled: !fv.open.dirty, onClick: saveFile }, "Save & commit")),
-        h("textarea", { class: "mono", rows: 18, value: fv.open.text, spellcheck: false, onInput: (e: any) => { fv.open!.text = e.target.value; if (!fv.open!.dirty) { fv.open!.dirty = true; render(); } } }),
+        h("textarea", { "data-key": "editor", class: "mono", rows: 18, value: fv.open.text, spellcheck: false, onInput: (e: any) => { fv.open!.text = e.target.value; if (!fv.open!.dirty) { fv.open!.dirty = true; render(); } } }),
       ) : h("div", { class: "muted" }, "pick a file"),
     ),
   );
@@ -536,17 +557,26 @@ function renderTreeAt(): Node {
 
 // ---------- boot ----------
 render();
+setTimeout(() => {
+  if (!info && !error) {
+    error = `the worker has not answered in 15 s. ${crossOriginIsolated ? "" : "This page is not cross-origin isolated (service worker inactive?). "}${typeof navigator.storage?.getDirectory === "function" ? "" : "No OPFS in this browser. "}Open the browser console for details.`;
+    render();
+  }
+}, 15000);
 (async () => {
   try {
     info = await worker.call<InitInfo>({ method: "init", shell: new URLSearchParams(location.search).get("shell") ?? undefined });
-    statusText = "ready";
+    statusText = "ready; starting the system…";
     config = { ...info.config, ...config };
     await worker.call({ method: "configure", config });
     transcript = await worker.call({ method: "transcript" });
     for (const c of info.combs) await refreshLog(c);
+    render();
+    void worker.call({ method: "boot" });
   } catch (e: any) {
     error = `worker failed to start: ${e.message}`;
     statusText = "failed";
+    console.error(e);
   }
   render();
 })();
