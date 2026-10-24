@@ -67,7 +67,8 @@ export type Request =
   | { id: number; method: "wipe" }
   | { id: number; method: "bridgeAvailable"; available: boolean }
   | { id: number; method: "debugFetch"; url: string }
-  | { id: number; method: "debugTool"; name: string; params: unknown };
+  | { id: number; method: "debugTool"; name: string; params: unknown }
+  | { id: number; method: "saveFile"; comb: string; path: string; content: string }; // you, editing outside pi → external entry
 
 /** Page → worker, outside the RPC: a response event from the egress bridge. */
 export interface BridgeInbound {

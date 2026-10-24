@@ -398,6 +398,15 @@ async function handle(req: Request): Promise<unknown> {
     case "wipe":
       await dc.wipe();
       return null;
+    case "saveFile": {
+      // An edit made by you in the page's editor: outside any tool call, so an "external" entry.
+      if (agent?.state.isStreaming) throw new Error("wait for the agent to finish");
+      dc.writeFile(req.comb, req.path, req.content);
+      const id = await dc.commit(req.comb, { kind: "external" }, { session: sessionId, harness: "editor", model: "", principal: "user" });
+      post({ type: "history", comb: req.comb, objectCount: dc.objectCount() });
+      if (id && req.comb === NIX_COMB) await switchSystem("commit from the editor");
+      return id;
+    }
     case "debugTool": {
       const tool = agent?.state.tools.find((t) => t.name === req.name);
       if (!tool) throw new Error(`no tool ${req.name}`);

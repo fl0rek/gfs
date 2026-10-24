@@ -58,3 +58,39 @@ for (const name of Object.keys(PACKAGES)) {
   console.log(`${bare}: recorded registry answer (${pkg.versions.map((v) => v.version).join(", ")})`);
 }
 writeFileSync(new URL("index.json", out), JSON.stringify({ packages: PACKAGES, registry }, null, 1));
+
+// ---- the deployed system (/nix/machine.json seed) ----
+// If the machine flake was built (prototype/machine/result, or $MACHINE_OUT), its wasm modules are
+// copied into public/machine/ and become the system; the registry .webc packages fill in whatever the
+// flake does not provide yet (e.g. coreutils while only bash is built). Otherwise the .webc packages
+// alone are the system.
+const machineOut = process.env.MACHINE_OUT ?? new URL("../../machine/result/", import.meta.url).pathname;
+const systemPackages = [];
+let systemName;
+if (existsSync(`${machineOut}/manifest.json`)) {
+  const m = JSON.parse(readFileSync(`${machineOut}/manifest.json`, "utf8"));
+  const dest = new URL("../public/machine/", import.meta.url);
+  mkdirSync(dest, { recursive: true });
+  for (const [cmd, { module }] of Object.entries(m.commands ?? {})) {
+    const bytes = readFileSync(`${machineOut}/${module}`);
+    const sha = createHash("sha256").update(bytes).digest("hex");
+    const file = module.split("/").pop();
+    writeFileSync(new URL(file, dest), bytes);
+    systemPackages.push({ kind: "wasm", name: `nix:${file}`, url: `machine/${file}`, sha256: sha, command: cmd });
+  }
+  const nixCmds = Object.keys(m.commands ?? {});
+  systemName = `nix-built (${nixCmds.join(", ")}; llvm ${m.toolchain?.llvm ?? "?"}, sysroot ${m.sysroot?.release ?? "?"})`;
+  console.log(`machine: ${nixCmds.length} nix-built command(s): ${nixCmds.join(", ")}`);
+  if (nixCmds.includes("bash")) {
+    // bash from Nix; keep Wasmer's coreutils for the utilities until the flake provides them.
+    for (const [name, sha] of Object.entries(PACKAGES)) if (!name.startsWith("wasmer/bash")) systemPackages.push({ kind: "webc", name, url: `packages/${sha}.webc`, sha256: sha });
+  } else {
+    for (const [name, sha] of Object.entries(PACKAGES)) systemPackages.push({ kind: "webc", name, url: `packages/${sha}.webc`, sha256: sha });
+    systemName += " + wasmer registry bash/coreutils";
+  }
+} else {
+  for (const [name, sha] of Object.entries(PACKAGES)) systemPackages.push({ kind: "webc", name, url: `packages/${sha}.webc`, sha256: sha });
+  systemName = "wasmer registry packages (bash + coreutils), served from this origin";
+}
+writeFileSync(new URL("machine.json", systemDir), JSON.stringify({ name: systemName, shell: "bash", packages: systemPackages }, null, 2) + "\n");
+console.log(`system: ${systemName}`);

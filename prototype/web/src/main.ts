@@ -28,6 +28,8 @@ let selectedEntry: string | null = null;
 let detail: EntryDetail | null = null;
 let verify: VerifyReport | null = null;
 let treeAt: { entryId: string; files: [string, string, number][]; open?: { path: string; text: string } } | null = null;
+// The "files" view: the selected comb's working tree, editable by hand.
+let filesView: { comb: string; files: [string, string, number][]; open?: { path: string; text: string; dirty: boolean } } | null = null;
 let error: string | null = null;
 let config: ModelConfig = loadConfig();
 
@@ -233,6 +235,32 @@ async function openAt(entryId: string, path: string) {
   render();
 }
 
+async function openFiles(comb: string) {
+  filesView = { comb, files: await worker.call({ method: "tree", comb }) };
+  selectedEntry = null;
+  detail = null;
+  render();
+}
+async function openFile(comb: string, path: string) {
+  const text = await worker.call<string>({ method: "file", comb, path });
+  if (filesView) filesView.open = { path, text, dirty: false };
+  render();
+}
+async function saveFile() {
+  if (!filesView?.open) return;
+  const { comb } = filesView;
+  const { path, text } = filesView.open;
+  try {
+    await worker.call({ method: "saveFile", comb, path, content: text });
+    filesView.open.dirty = false;
+    filesView.files = await worker.call({ method: "tree", comb });
+    await refreshLog(comb);
+  } catch (e: any) {
+    error = e.message;
+  }
+  render();
+}
+
 async function wipe() {
   if (!confirm("Wipe everything stored in this browser (all combs, the whole history, the transcript)?")) return;
   await worker.call({ method: "wipe" });
@@ -407,9 +435,10 @@ function renderTimeline() {
       h("select", { value: selectedComb, onChange: async (e: any) => { selectedComb = e.target.value; selectedEntry = null; detail = null; verify = null; await refreshLog(selectedComb); render(); } },
         combs.map((c) => h("option", { value: c, selected: c === selectedComb }, c === "nix" ? "/nix (running system)" : `/datacombs/${c}`))),
       h("button", { onClick: () => doVerify(selectedComb) }, "Verify chain"),
+      h("button", { class: filesView?.comb === selectedComb ? "active" : "", onClick: () => (filesView?.comb === selectedComb ? ((filesView = null), render()) : openFiles(selectedComb)) }, "Files"),
       verify ? h("span", { class: verify.ok ? "ok" : "warn" }, verify.ok ? ` ✓ ${verify.entries} entries, ${verify.objects_checked} objects hash correctly` : ` ✗ ${verify.problems.join("; ")}`) : null,
     ),
-    h("div", { class: "timeline-body" }, list, selectedEntry ? renderDetail() : null),
+    h("div", { class: "timeline-body" }, list, filesView?.comb === selectedComb ? renderFiles() : selectedEntry ? renderDetail() : null),
   );
 }
 
@@ -463,6 +492,28 @@ function renderDetail(): Node {
         )),
     ) : h("p", { class: "muted" }, "loading diff…"),
     treeAt && treeAt.entryId === e.id ? renderTreeAt() : null,
+  );
+}
+
+function renderFiles(): Node {
+  const fv = filesView!;
+  const where = fv.comb === "nix" ? "/nix" : `/datacombs/${fv.comb}`;
+  return h("div", { class: "detail files-view" },
+    h("div", { class: "detail-head" },
+      h("b", {}, `files in ${where}`),
+      h("span", { class: "muted" }, fv.comb === "nix" ? " — saving machine.json switches the running system" : " — saving commits an external entry, as you"),
+      h("span", { class: "grow" }),
+      h("button", { class: "link", onClick: () => { filesView = null; render(); } }, "close"),
+    ),
+    h("div", { class: "files-split" },
+      h("ul", { class: "file-list" }, fv.files.length ? fv.files.map(([p, hash, size]) =>
+        h("li", { class: fv.open?.path === p ? "selected" : "" }, h("a", { href: "#", onClick: (ev: Event) => { ev.preventDefault(); openFile(fv.comb, p); } }, p), h("span", { class: "muted mono" }, ` ${size} B · ${short(hash)}`))) : h("li", { class: "muted" }, "empty")),
+      fv.open ? h("div", { class: "editor" },
+        h("div", { class: "row" }, h("span", { class: "mono" }, fv.open.path), fv.open.dirty ? h("span", { class: "warn" }, " · modified") : null, h("span", { class: "grow" }),
+          h("button", { class: "primary", disabled: !fv.open.dirty, onClick: saveFile }, "Save & commit")),
+        h("textarea", { class: "mono", rows: 18, value: fv.open.text, spellcheck: false, onInput: (e: any) => { fv.open!.text = e.target.value; if (!fv.open!.dirty) { fv.open!.dirty = true; render(); } } }),
+      ) : h("div", { class: "muted" }, "pick a file"),
+    ),
   );
 }
 

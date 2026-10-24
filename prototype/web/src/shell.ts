@@ -100,16 +100,7 @@ export async function sha256Hex(bytes: Uint8Array): Promise<string> {
 /** The default system: what the site deployed. */
 export async function loadDeployedSystem(base: URL): Promise<{ manifest: SystemManifest; flake: string; registry: Record<string, any> }> {
   const index = await (await fetch(new URL("packages/index.json", base))).json();
-  const manifest: SystemManifest = {
-    name: "wasmer registry packages (bash + coreutils), served from this origin",
-    shell: "bash",
-    packages: Object.entries(index.packages as Record<string, string>).map(([name, sha256]) => ({
-      kind: "webc" as const,
-      name,
-      url: `packages/${sha256}.webc`,
-      sha256,
-    })),
-  };
+  const manifest: SystemManifest = await (await fetch(new URL("system/machine.json", base))).json();
   const flakeRes = await fetch(new URL("system/flake.nix", base));
   const flake = flakeRes.ok ? await flakeRes.text() : "# no flake deployed with this build\n";
   return { manifest, flake, registry: index.registry ?? {} };
@@ -183,8 +174,9 @@ export class WasixShell implements Shell {
           this.status(`loading ${p.name}…`, true);
           pkgs.push(await this.wasmer.packages.load(bytes));
         } else {
-          modules[p.name] = bytes;
-          commands[p.command] = { module: p.name };
+          const mod = p.url.split("/").pop()!.replace(/[^A-Za-z0-9._+-]/g, "_");
+          modules[mod] = bytes;
+          commands[p.command] = { module: mod };
         }
       }
       if (Object.keys(modules).length) pkgs.push(await this.wasmer.packages.create({ modules, commands }));
