@@ -107,6 +107,14 @@ let
     "--enable-exception-handling" "--enable-simd" "--enable-relaxed-simd" "--enable-extended-const"
   ];
 
+  # Runtime quirk shims (compat/wasix-quirks.c), linked into every executable
+  # with --wrap. WASIX_NO_QUIRKS=1 leaves them out.
+  quirks = pkgs.runCommand "wasix-quirks" { } ''
+    mkdir -p $out/lib
+    ${clang}/bin/clang ${lib.escapeShellArgs compileFlags} -O2 -c -o $out/lib/wasix-quirks.o ${./compat/wasix-quirks.c}
+  '';
+  quirkWraps = [ "fstat" "lseek" "__wasilibc_tell" "__main_argc_argv" ];
+
   # Note: binaryen is deliberately NOT put on PATH, because clang's wasm driver
   # runs `wasm-opt` on its own when it finds one there; we call it by path.
   ccScript = pkgs.writeTextFile {
@@ -142,11 +150,14 @@ let
 
       args=(${lib.escapeShellArgs compileFlags})
       if [ $link = 1 ]; then
-        args+=("-fuse-ld=lld" "-B${lld}/bin" "-nostdlib" "--no-wasm-opt")
+        args+=("-fuse-ld=lld" "-B${lld}/bin" "-nostdlib" "--no-wasm-opt" "-Wno-unused-command-line-argument")
         for f in ${lib.escapeShellArgs ldFlags}; do args+=("-Wl,$f"); done
       fi
       args+=("$@")
       if [ $link = 1 ]; then
+        if [ -z "''${WASIX_NO_QUIRKS:-}" ]; then
+          args+=(${lib.concatMapStringsSep " " (w: "-Wl,--wrap=${w}") quirkWraps} "${quirks}/lib/wasix-quirks.o")
+        fi
         args+=(${lib.escapeShellArgs ldLibs} "${sysroot}/lib/${target}/crt1.o")
       fi
 
@@ -216,7 +227,7 @@ let
 in
 {
   inherit sysroot toolchain mkDerivation mode target;
-  inherit compileFlags ldFlags ldLibs wasmOptFeatures;
+  inherit compileFlags ldFlags ldLibs wasmOptFeatures quirks;
   cc = toolchain;
   llvmVersion = llvmPackages.release_version;
   binaryenVersion = binaryen.version;

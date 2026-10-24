@@ -36,8 +36,11 @@ wasix.mkDerivation ({
   postInstall = ''
     cd $out/bin
     for f in *; do
-      if [ -f "$f" ] && [ ! -L "$f" ] && head -c4 "$f" | grep -q $'\0asm'; then
+      [ -f "$f" ] && [ ! -L "$f" ] || continue
+      if [ "$(head -c4 "$f" | od -An -tx1 | tr -d ' \n')" = 0061736d ]; then
         mv "$f" "$f.wasm"
+      else
+        rm -f "$f"            # shell-script wrappers (egrep, fgrep, ...) are useless here
       fi
     done
     # symlinks (coreutils single-binary) -> drop; the manifest maps names
