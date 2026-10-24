@@ -20,6 +20,8 @@ export interface ToolContext {
   fetch: typeof fetch;
   /** /proc reader */
   proc: (path: string) => string;
+  /** every /proc file, for mirroring into the shell */
+  procAll: () => Record<string, string>;
   author: () => Author;
   turnId: () => string;
   /** Called after a tool call produced a history entry. */
@@ -258,7 +260,8 @@ export function makeTools(ctx: ToolContext): AgentTool<any, any>[] {
       const { command, timeout } = params;
       const t0 = performance.now();
       const sh = await ctx.shell();
-      const res = await sh.run(WORKSPACE, command, {
+      const res = await sh.run(command, {
+        proc: ctx.procAll(),
         timeoutMs: timeout ? timeout * 1000 : undefined,
         signal,
         onData: (chunk) => onUpdate?.({ content: [{ type: "text", text: chunk }], details: undefined }),

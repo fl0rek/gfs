@@ -200,6 +200,17 @@ function procEntries(): Record<string, () => string> {
     "uptime": () => `${Math.round((Date.now() - startedAt) / 1000)}\n`,
   };
 }
+function procAll(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, f] of Object.entries(procEntries())) {
+    try {
+      out[k] = f();
+    } catch (e: any) {
+      out[k] = `error: ${e.message}\n`;
+    }
+  }
+  return out;
+}
 function procRead(path: string): string {
   const entries = procEntries();
   if (path === "") return Object.keys(entries).join("\n") + "\n";
@@ -244,7 +255,7 @@ function systemPrompt() {
     "<environment>",
     `Your working directory is ${CWD}. It is a comb: a versioned directory whose every tool call becomes one history entry. The past is readable at ${CWD}@<entry-id>/<path>.`,
     `/nix is the comb holding the running system's flake: machine.json lists the packages the shell sandbox runs, pinned by sha256; editing it (any tool call that changes it) switches the system; flake.nix is its source but cannot be built here. /proc is read-only and describes this session: read /proc to list it (session, model, turn, combs, system, shell, egress, mounts).`,
-    `bash runs in a WASIX sandbox over ${CWD} only; the commands it has are listed in /proc/shell (the Nix-built system has bash, coreutils, grep, sed, awk, find, xargs, diff; no git). It has no network; use the fetch tool for HTTP. Prefer the read tool over cat.`,
+    `bash runs in a WASIX sandbox over the same root (/datacombs/<comb>, /nix, /proc; the @<entry> views are not mounted there); the commands it has are listed in /proc/shell (the Nix-built system has bash, coreutils, grep, sed, awk, find, xargs, diff; no git). It has no network; use the fetch tool for HTTP. Prefer the read tool over cat.`,
     "</environment>",
     "",
     `<cwd>${CWD}</cwd>`,
@@ -290,6 +301,7 @@ function makeToolsFor() {
     shell: currentShell,
     fetch: smartFetch,
     proc: procRead,
+    procAll,
     author,
     turnId,
     onEntry: async (comb) => {
@@ -431,13 +443,16 @@ async function handle(req: Request): Promise<unknown> {
       status(`$ ${req.command}`, true);
       let res;
       try {
-        res = await (await currentShell()).run(WORKSPACE, req.command, { cwd: CWD, timeoutMs: req.timeoutMs });
+        res = await (await currentShell()).run(req.command, { cwd: CWD, timeoutMs: req.timeoutMs, proc: procAll() });
       } finally {
         status("shell ready", false);
       }
-      const id = await dc.commit(WORKSPACE, { kind: "external" }, { session: sessionId, harness: "shell", model: "", principal: "user" });
-      if (id) post({ type: "history", comb: WORKSPACE, objectCount: dc.objectCount() });
-      return res;
+      for (const comb of res.changed) {
+        const id = await dc.commit(comb, { kind: "external" }, { session: sessionId, harness: "shell", model: "", principal: "user" });
+        if (id) post({ type: "history", comb, objectCount: dc.objectCount() });
+        if (id && comb === NIX_COMB) await switchSystem("commit from the shell");
+      }
+      return { output: res.output, exitCode: res.exitCode };
     }
     case "wipe":
       await dc.wipe();

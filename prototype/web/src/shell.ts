@@ -1,10 +1,18 @@
-// PROTOTYPE. A real WASIX bash (Wasmer JS SDK) whose /workspace is a comb.
+// PROTOTYPE. A real WASIX bash (Wasmer JS SDK) that sees the gfs root.
 //
 // The SDK's sandbox has its own in-memory filesystem; we don't yet mount gfs
 // into it directly (the SDK's host-filesystem bridge is experimental). Instead,
-// around every command the comb's working tree is synced into /workspace and
-// whatever the command changed is synced back, so the tool call's changes
-// land in gfs and become one history entry like any other tool call.
+// every command sees the root the harness sees:
+//   /datacombs/<comb>   every comb's working tree (read-write)
+//   /nix                the nix comb (read-write; a change there is a switch)
+//   /proc               a snapshot of the session (writes are dropped)
+// Two SDK facts shape how: the host may only touch `/workspace`, and changes
+// to `/` do not survive from one guest process to the next. So the host keeps
+// an incremental mirror under /workspace/.gfs, and each command runs inside a
+// wrapper bash that copies it to /, runs the command in a child bash at
+// /datacombs/workspace, and copies the combs back to /workspace/.gfs/out,
+// which the host diffs against gfs. Whatever changed lands in gfs and becomes
+// one history entry like any other tool call.
 
 import type { Wasmer, Sandbox, Package } from "@wasmer/sdk/browser";
 
@@ -16,7 +24,7 @@ async function loadSdk(): Promise<typeof import("@wasmer/sdk/browser")> {
   return import(/* @vite-ignore */ url);
 }
 import type { Datacombs } from "./gfs";
-import { DATACOMBS } from "./paths";
+import { DATACOMBS, NIX_COMB } from "./paths";
 
 export interface RunOptions {
   timeoutMs?: number;
@@ -24,15 +32,20 @@ export interface RunOptions {
   onData?: (chunk: string) => void;
   cwd: string;
   env?: Record<string, string>;
+  /** /proc contents to expose, path → text. */
+  proc?: Record<string, string>;
 }
 
 export interface RunResult {
   output: string;
   exitCode: number;
+  /** Combs whose working tree the command changed. */
+  changed: string[];
 }
 
 export interface Shell {
-  run(comb: string, command: string, opts: RunOptions): Promise<RunResult>;
+  /** Run a command over the whole gfs root; returns the combs it changed. */
+  run(command: string, opts: RunOptions): Promise<RunResult>;
   warmup(): Promise<void>;
   close(): Promise<void>;
   /** Commands the shell's sandbox offers, once warmed up. */
@@ -115,8 +128,9 @@ export class WasixShell implements Shell {
   private extraPkgs: Package[] = [];
   private commandName = "bash";
   private ready: Promise<void> | null = null;
-  /** What the sandbox's /workspace currently holds: path → blob hash. */
-  private mirrored = new Map<string, string>();
+  /** What the sandbox currently holds per comb: path → blob hash. */
+  private mirrored = new Map<string, Map<string, string>>();
+  private procFiles = new Set<string>();
 
   constructor(
     private dc: Datacombs,
@@ -196,24 +210,24 @@ export class WasixShell implements Shell {
     this.status("creating sandbox…", true);
     // Dependencies first, so the shell's `use` edges resolve against what is already installed.
     this.sandbox = await this.wasmer.sandboxes.create({ packages: [...this.extraPkgs, this.pkg] });
-    await this.sandbox.fs.mkdir("/workspace", { recursive: true }).catch(() => {});
+    for (const d of [`${STAGE}/datacombs`, `${STAGE}/nix`, `${STAGE}/proc`]) await this.sandbox.fs.mkdir(d, { recursive: true }).catch(() => {});
     this.mirrored.clear();
     this.status("shell ready", false);
   }
 
-  async run(comb: string, command: string, opts: RunOptions): Promise<RunResult> {
+  async run(command: string, opts: RunOptions): Promise<RunResult> {
     await this.warmup();
     const sandbox = this.sandbox!;
-    await this.syncIn(comb);
+    await this.syncIn(opts.proc ?? {});
     const env = {
-      HOME: "/workspace",
-      PWD: `/workspace`,
+      HOME: opts.cwd,
+      PWD: opts.cwd,
       TERM: "dumb",
-      PI_GFS_CWD: opts.cwd,
-      PI_GFS_ROOT: DATACOMBS,
+      GFS_CMD: command,
+      GFS_CWD: opts.cwd,
       ...(opts.env ?? {}),
     };
-    const cmd = sandbox.command(this.pkg!.command(this.commandName), ["-c", command], { cwd: "/workspace", env });
+    const cmd = sandbox.command(this.pkg!.command(this.commandName), ["-c", WRAPPER], { cwd: "/", env });
     const proc = await cmd.spawn({ stdin: "closed", stdout: "pipe", stderr: "pipe", timeoutMs: opts.timeoutMs });
     const chunks: string[] = [];
     const pump = async (stream: AsyncIterable<Uint8Array> | null) => {
@@ -231,59 +245,116 @@ export class WasixShell implements Shell {
       const out = await proc.wait({ check: false });
       if (opts.signal?.aborted) throw new Error("Command aborted");
       if (out.reason === "timeout") throw new Error(`Command timed out after ${(opts.timeoutMs ?? 0) / 1000} seconds`);
-      await this.syncOut(comb);
-      return { output: chunks.join(""), exitCode: out.exitCode };
+      const changed = await this.syncOut();
+      return { output: chunks.join(""), exitCode: out.exitCode, changed };
     } finally {
       opts.signal?.removeEventListener("abort", onAbort);
     }
   }
 
-  /** Bring /workspace up to date with the comb's working tree. */
-  private async syncIn(comb: string) {
+  /** Bring every comb and /proc up to date in the sandbox. */
+  private async syncIn(proc: Record<string, string>) {
     const fs = this.sandbox!.fs;
-    const want = new Map<string, string>();
-    for (const [path, hash] of this.dc.listAll(comb)) want.set(path, hash);
-    for (const [path] of this.mirrored) {
-      if (!want.has(path)) await fs.remove(`/workspace/${path}`).catch(() => {});
+    const combs = this.dc.listCombs();
+    // combs that vanished (not expected, but keep the mirror honest)
+    for (const comb of [...this.mirrored.keys()]) {
+      if (!combs.includes(comb)) {
+        await fs.remove(stageDir(comb), { recursive: true }).catch(() => {});
+        this.mirrored.delete(comb);
+      }
     }
-    for (const [path, hash] of want) {
-      if (this.mirrored.get(path) === hash) continue;
-      const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
-      if (dir) await fs.mkdir(`/workspace/${dir}`, { recursive: true }).catch(() => {});
-      await fs.writeFile(`/workspace/${path}`, this.dc.readFile(comb, path));
+    for (const comb of combs) {
+      const root = stageDir(comb);
+      const have = this.mirrored.get(comb) ?? new Map<string, string>();
+      if (!this.mirrored.has(comb)) await fs.mkdir(root, { recursive: true }).catch(() => {});
+      const want = new Map<string, string>();
+      for (const [path, hash] of this.dc.listAll(comb)) want.set(path, hash);
+      for (const [path] of have) if (!want.has(path)) await fs.remove(`${root}/${path}`).catch(() => {});
+      for (const [path, hash] of want) {
+        if (have.get(path) === hash) continue;
+        const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+        if (dir) await fs.mkdir(`${root}/${dir}`, { recursive: true }).catch(() => {});
+        await fs.writeFile(`${root}/${path}`, this.dc.readFile(comb, path));
+      }
+      this.mirrored.set(comb, want);
     }
-    this.mirrored = want;
+    // /proc: rewritten every time; small
+    for (const name of this.procFiles) if (!(name in proc)) await fs.remove(`${STAGE}/proc/${name}`).catch(() => {});
+    for (const [name, text] of Object.entries(proc)) await fs.writeText(`${STAGE}/proc/${name}`, text);
+    this.procFiles = new Set(Object.keys(proc));
   }
 
-  /** Write back what the command changed under /workspace. */
-  private async syncOut(comb: string) {
+  /** Write back what the command changed under any comb. Returns the combs that changed. */
+  private async syncOut(): Promise<string[]> {
     const fs = this.sandbox!.fs;
-    const seen = new Set<string>();
-    const walk = async (dir: string) => {
-      const entries = await fs.readDir(dir);
-      for (const e of entries) {
-        const full = dir === "/workspace" ? e.name : `${dir.slice("/workspace/".length)}/${e.name}`;
-        if (e.kind === "directory") {
-          await walk(`/workspace/${full}`);
-          continue;
-        }
-        seen.add(full);
-        const bytes = await fs.readFile(`/workspace/${full}`);
-        let same = false;
+    const changed: string[] = [];
+    for (const comb of this.dc.listCombs()) {
+      const root = outDir(comb);
+      const seen = new Set<string>();
+      let dirty = false;
+      const walk = async (dir: string) => {
+        let entries: readonly { name: string; kind: string }[] = [];
         try {
-          same = this.dc.exists(comb, full) && bytesEqual(this.dc.readFile(comb, full), bytes);
-        } catch {}
-        if (!same) this.dc.writeFile(comb, full, bytes);
+          entries = await fs.readDir(dir);
+        } catch {
+          return;
+        }
+        for (const e of entries) {
+          const full = dir === root ? e.name : `${dir.slice(root.length + 1)}/${e.name}`;
+          if (e.kind === "directory") {
+            await walk(`${root}/${full}`);
+            continue;
+          }
+          seen.add(full);
+          const bytes = await fs.readFile(`${root}/${full}`);
+          let same = false;
+          try {
+            same = this.dc.exists(comb, full) && bytesEqual(this.dc.readFile(comb, full), bytes);
+          } catch {}
+          if (!same) {
+            this.dc.writeFile(comb, full, bytes);
+            dirty = true;
+          }
+        }
+      };
+      await walk(root);
+      for (const [path] of this.dc.listAll(comb)) {
+        if (!seen.has(path)) {
+          this.dc.remove(comb, path);
+          dirty = true;
+        }
       }
-    };
-    await walk("/workspace");
-    for (const [path] of this.dc.listAll(comb)) {
-      if (!seen.has(path)) this.dc.remove(comb, path);
+      if (dirty) changed.push(comb);
+      // The staging copy is now stale for whatever changed; the next syncIn rewrites those files.
     }
-    // Refresh the mirror record from the comb (hashes come from gfs).
-    this.mirrored = new Map(this.dc.listAll(comb).map(([p, h]) => [p, h]));
+    return changed;
   }
 }
+
+/** Where a comb appears in the shell's root. */
+export function combDir(comb: string): string {
+  return comb === NIX_COMB ? "/nix" : `${DATACOMBS}/${comb}`;
+}
+
+/** The host's side of the mirror (the only place it may write). */
+const STAGE = "/workspace/.gfs";
+const stageDir = (comb: string) => `${STAGE}${combDir(comb)}`;
+const outDir = (comb: string) => `${STAGE}/out${combDir(comb)}`;
+
+/** Runs as the sandbox's bash: materialise the root, run the user's command, hand the combs back. */
+// (`cp -a src/. dst/` breaks on empty directories under WASIX; the plain form works.)
+const WRAPPER = [
+  `cp -a ${STAGE}/datacombs /datacombs || echo "gfs: could not materialise /datacombs" >&2`,
+  `cp -a ${STAGE}/nix /nix || echo "gfs: could not materialise /nix" >&2`,
+  `cp -a ${STAGE}/proc /proc || echo "gfs: could not materialise /proc" >&2`,
+  'cd "$GFS_CWD" 2>/dev/null || cd /datacombs/workspace',
+  'bash -c "$GFS_CMD"',
+  "rc=$?",
+  `rm -rf ${STAGE}/out; mkdir -p ${STAGE}/out`,
+  `cp -a /datacombs ${STAGE}/out/datacombs || echo "gfs: could not read back /datacombs" >&2`,
+  `cp -a /nix ${STAGE}/out/nix || echo "gfs: could not read back /nix" >&2`,
+  "exit $rc",
+].join("\n");
 
 function bytesEqual(a: Uint8Array, b: Uint8Array) {
   if (a.length !== b.length) return false;
@@ -294,6 +365,9 @@ function bytesEqual(a: Uint8Array, b: Uint8Array) {
 /** Used until the WASIX shell is wanted, or when it cannot start. */
 export class UnavailableShell implements Shell {
   constructor(private reason: string) {}
+  get unavailable() {
+    return this.reason;
+  }
   async warmup() {}
   async close() {}
   commands() {
