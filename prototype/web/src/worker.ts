@@ -15,9 +15,10 @@ import { cerebrasProvider } from "@earendil-works/pi-ai/providers/cerebras";
 import { mistralProvider } from "@earendil-works/pi-ai/providers/mistral";
 import { FreeRouter, loadFreeList } from "./free";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
-import { Datacombs } from "./gfs";
+import { Datacombs, type EntryKind } from "./gfs";
 import { makeTools } from "./tools";
-import { WasixShell, UnavailableShell, installRegistryShim, loadDeployedSystem, type Shell, type SystemManifest } from "./shell";
+import { WasixShell, UnavailableShell, installRegistryShim, loadDeployedSystem, processLog, runtimeHeapBytes, type Shell, type SystemManifest } from "./shell";
+import { readMachine, machineSnapshot, type MachineSources } from "./machine";
 import { createMockProvider, MOCK_MODEL_ID, MOCK_PROVIDER_ID } from "./mock-model";
 import { CWD, WORKSPACE, NIX_COMB, resolvePath } from "./paths";
 import type { Author, BridgeInbound, EntryDetail, InitInfo, ModelConfig, Notification, Reply, Request } from "./protocol";
@@ -36,6 +37,8 @@ let sessionId = "";
 let turnIndex = 0;
 let currentTurnId = "";
 const startedAt = Date.now();
+let switchCount = 0;
+let toolCallCount = 0;
 /** The system the shell is running: the /nix comb's machine.json as of the entry it was switched at. */
 let runningSystem: { manifest: SystemManifest; entry: string; switchedAt: number } | null = null;
 let shellOrigin: URL = new URL(import.meta.env.BASE_URL, self.location.href);
@@ -157,55 +160,100 @@ async function init(shellParam?: string): Promise<InitInfo> {
   };
 }
 
-/** Rebuild the shell from /nix/machine.json. Called at boot and after every history entry on the nix comb. */
+/**
+ * Commit a change to a comb. For /nix this is atomic with the switch: the new system is
+ * booted from the working tree first; only if that succeeds are the change and a `switch`
+ * entry committed, otherwise the working tree is reset to head and the error is thrown
+ * to whoever made the change. So /nix's head is always the running system.
+ */
+async function commitComb(comb: string, kind: EntryKind, author: Author, reason: string): Promise<string | null> {
+  if (comb !== NIX_COMB) {
+    const id = await dc.commit(comb, kind, author);
+    if (id) post({ type: "history", comb, objectCount: dc.objectCount() });
+    return id;
+  }
+  const changed = dc.status(NIX_COMB);
+  if (changed.length === 0) return null;
+  const manifestChanged = changed.some((d) => d.path === "machine.json");
+  let next: WasixShell | null = null;
+  let manifest: SystemManifest | null = null;
+  if (manifestChanged) {
+    try {
+      manifest = parseManifest(dc.readText(NIX_COMB, "machine.json"));
+      if (!runningSystem || JSON.stringify(runningSystem.manifest) !== JSON.stringify(manifest)) {
+        next = new WasixShell(dc, { kind: "system", base: shellOrigin, manifest }, status);
+        await next.warmup();
+      }
+    } catch (e: any) {
+      await next?.close();
+      dc.resetWorking(NIX_COMB);
+      status(`switch refused: ${e.message}`, false);
+      post({ type: "error", message: `switch refused, /nix change dropped: ${e.message}` });
+      throw new Error(`switch refused: ${e.message}. /nix/machine.json was reverted to the running system; nothing was committed.`);
+    }
+  }
+  const id = await dc.commit(NIX_COMB, kind, author);
+  post({ type: "history", comb: NIX_COMB, objectCount: dc.objectCount() });
+  if (id && manifest) await adoptSystem(next, manifest, id, reason);
+  return id;
+}
+
+function parseManifest(text: string): SystemManifest {
+  const m = JSON.parse(text);
+  if (!m.shell || !Array.isArray(m.packages)) throw new Error("machine.json needs {shell, packages[]}");
+  return m;
+}
+
+/** Make `next` (already warmed up; null when the packages are unchanged) the running system at /nix@entry. */
+async function adoptSystem(next: WasixShell | null, manifest: SystemManifest, entry: string, reason: string) {
+  const previous = runningSystem?.entry ?? null;
+  if (next) {
+    const old = shell;
+    shell = next;
+    await old.close();
+    if (agent) agent.state.tools = makeToolsFor();
+  }
+  runningSystem = { manifest, entry, switchedAt: Date.now() };
+  switchCount++;
+  // The switch is an event of its own in /nix's history: same tree, different kind.
+  await dc.commit(NIX_COMB, { kind: "switch", at_entry: entry, previous, system: manifest.name ?? "" }, { session: sessionId, harness: "node", model: "", principal: "user" });
+  post({ type: "history", comb: NIX_COMB, objectCount: dc.objectCount() });
+  status(`system: /nix@${entry.slice(0, 8)} (${reason})`, false);
+  post({ type: "system", entry, name: manifest.name ?? "", reason });
+}
+
+/** Boot: run whatever /nix's head says (the last committed system). */
 async function switchSystem(reason: string): Promise<boolean> {
   const head = dc.head(NIX_COMB);
+  // The entry the running system corresponds to: head, or what the last switch pointed at.
+  const headEntry = dc.entry(head);
+  const at = headEntry.kind === "switch" && headEntry.at_entry ? headEntry.at_entry : head;
   let manifest: SystemManifest;
   try {
-    manifest = JSON.parse(dc.readText(NIX_COMB, "machine.json"));
-    if (!manifest.shell || !Array.isArray(manifest.packages)) throw new Error("machine.json needs {shell, packages[]}");
+    manifest = parseManifest(dc.readText(NIX_COMB, "machine.json"));
   } catch (e: any) {
-    status(`/nix/machine.json is invalid (${e.message}); keeping the running system`, false);
-    post({ type: "error", message: `switch refused: ${e.message}` });
-    return false;
-  }
-  if (runningSystem && JSON.stringify(runningSystem.manifest) === JSON.stringify(manifest)) {
-    // Same built system at a newer entry (flake.nix edited, or a rollback to an identical manifest): nothing to rebuild.
-    const e = dc.entry(head);
-    if (e.kind === "switch") return false; // our own record of the last switch
-    runningSystem.entry = head;
-    post({ type: "system", entry: head, name: manifest.name ?? "", reason: `${reason}; same packages, no rebuild` });
+    status(`/nix/machine.json is invalid (${e.message}); no system`, false);
+    post({ type: "error", message: `boot refused: ${e.message}` });
     return false;
   }
   const next = new WasixShell(dc, { kind: "system", base: shellOrigin, manifest }, status);
   try {
     await next.warmup();
   } catch (e: any) {
-    status(`switch refused: ${e.message}`, false);
-    post({ type: "error", message: `switch to /nix@${head.slice(0, 8)} refused: ${e.message}` });
+    status(`the system failed to start: ${e.message}`, false);
+    post({ type: "error", message: `/nix@${at.slice(0, 8)} failed to start: ${e.message}` });
     await next.close();
-    if (!runningSystem) {
-      shell = new UnavailableShell(`the system failed to start: ${e.message}`);
-      if (agent) agent.state.tools = makeToolsFor();
-    }
+    shell = new UnavailableShell(`the system failed to start: ${e.message}`);
+    if (agent) agent.state.tools = makeToolsFor();
     return false;
   }
   const old = shell;
   shell = next;
-  const previous = runningSystem?.entry ?? null;
-  runningSystem = { manifest, entry: head, switchedAt: Date.now() };
   await old.close();
+  runningSystem = { manifest, entry: at, switchedAt: Date.now() };
   if (agent) agent.state.tools = makeToolsFor();
-  // The switch is an event of its own in /nix's history: same tree, different kind.
-  const switchId = await dc.commit(
-    NIX_COMB,
-    { kind: "switch", at_entry: head, previous, system: manifest.name ?? "" },
-    { session: sessionId, harness: "node", model: "", principal: "user" },
-  );
-  post({ type: "history", comb: NIX_COMB, objectCount: dc.objectCount() });
-  status(`system: /nix@${head.slice(0, 8)} (${reason})`, false);
-  post({ type: "system", entry: head, name: manifest.name ?? "", reason });
-  void switchId;
+  status(`system: /nix@${at.slice(0, 8)} (${reason})`, false);
+  post({ type: "system", entry: at, name: manifest.name ?? "", reason });
   return true;
 }
 
@@ -245,7 +293,8 @@ function systemPrompt() {
     "<environment>",
     `Your working directory is ${CWD}. It is a comb: a versioned directory whose every tool call becomes one history entry. The past is readable at ${CWD}@<entry-id>/<path>.`,
     `/nix is the comb holding the running system's flake: machine.json lists the packages the shell sandbox runs, pinned by sha256; editing it (any tool call that changes it) switches the system; flake.nix is its source but cannot be built here.`,
-    `bash runs in a WASIX sandbox over the same root (/datacombs/<comb> and /nix; the @<entry> views are not mounted there). The Nix-built system has bash, coreutils, grep, sed, awk, find, xargs, diff; no git. It has no network; use the fetch tool for HTTP. Prefer the read tool over cat.`,
+    `/machine is read-only and describes this node (read /machine for the index: session, system, shell, processes, runtime, agent, storage, egress, mounts, uptime).`,
+    `bash runs in a WASIX sandbox over the same root (/datacombs/<comb>, /nix, /machine; the @<entry> views are not mounted there). The Nix-built system has bash, coreutils, grep, sed, awk, find, xargs, diff; no git. It has no network; use the fetch tool for HTTP. Prefer the read tool over cat.`,
     "</environment>",
     "",
     `<cwd>${CWD}</cwd>`,
@@ -286,17 +335,44 @@ function currentModel(): Model<any> {
   return m;
 }
 
+/** What /machine is made of. */
+const machineSources: MachineSources = {
+  startedAt,
+  session: () => ({ id: sessionId, node: NODE, started: new Date(startedAt).toISOString(), harness: "pi", model: `${config.provider}/${config.model}`, turn: currentTurnId || null, turns: turnIndex }),
+  system: () =>
+    runningSystem
+      ? { entry: runningSystem.entry, path: `/nix@${runningSystem.entry}`, since: new Date(runningSystem.switchedAt).toISOString(), name: runningSystem.manifest.name ?? null, shell: runningSystem.manifest.shell, packages: runningSystem.manifest.packages.map((p) => ({ name: p.name, sha256: p.sha256, url: p.url })) }
+      : { entry: null, note: "no system running (shell unavailable or still booting)" },
+  shell: () => ({ ready: shell instanceof WasixShell, booting: !!(pendingBoot || bootInProgress), commands: shell.commands(), packages: shell.packages(), bootedAt: shell.bootedAt, switches: switchCount }),
+  egress: () => egressMode(),
+  combs: () => dc.listCombs().map((c) => { const files = dc.listAll(c); return { name: c, head: dc.head(c), files: files.length, bytes: files.reduce((n, [, , size]) => n + size, 0) }; }),
+  objectCount: () => dc.objectCount(),
+  storageEstimate: async () => { try { const e = await navigator.storage.estimate(); return { usage: e.usage, quota: e.quota }; } catch { return null; } },
+  agent: () => {
+    const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+    for (const m of agent?.state.messages ?? []) {
+      if (m.role !== "assistant") continue;
+      const u = (m as any).usage;
+      if (!u) continue;
+      usage.input += u.input ?? 0; usage.output += u.output ?? 0; usage.cacheRead += u.cacheRead ?? 0; usage.cacheWrite += u.cacheWrite ?? 0; usage.cost += u.cost?.total ?? 0;
+    }
+    return { model: `${config.provider}/${config.model}`, turn: currentTurnId || null, turns: turnIndex, toolCalls: toolCallCount, usage, free: config.provider === "free" ? free.status() : null };
+  },
+  processes: () => processLog,
+  runtimeHeap: runtimeHeapBytes,
+  sdkVersion: () => "@wasmer/sdk 0.19.1",
+};
+
 function makeToolsFor() {
   return makeTools({
+    machine: (path) => readMachine(machineSources, path),
+    machineAll: () => machineSnapshot(machineSources),
     dc,
     shell: currentShell,
     fetch: smartFetch,
     author,
     turnId,
-    onEntry: async (comb) => {
-      post({ type: "history", comb, objectCount: dc.objectCount() });
-      if (comb === NIX_COMB) await switchSystem("commit by tool call");
-    },
+    commit: (comb, kind, author) => commitComb(comb, kind, author, "commit by tool call"),
   });
 }
 
@@ -314,6 +390,7 @@ function buildAgent(messages: AgentMessage[]) {
 }
 
 async function onAgentEvent(ev: AgentEvent) {
+  if (ev.type === "tool_execution_start") toolCallCount++;
   if (ev.type === "turn_start") {
     turnIndex++;
     currentTurnId = `${sessionId}#${turnIndex}`;
@@ -370,9 +447,24 @@ function looksText(b: Uint8Array) {
 
 async function rollback(comb: string, entryId: string) {
   if (agent?.state.isStreaming) throw new Error("wait for the agent to finish");
+  let next: WasixShell | null = null;
+  let manifest: SystemManifest | null = null;
+  if (comb === NIX_COMB) {
+    // Atomic like any other /nix change: the target system must boot before the rollback is recorded.
+    try {
+      manifest = parseManifest(new TextDecoder().decode(dc.readFileAt(entryId, "machine.json")));
+      if (!runningSystem || JSON.stringify(runningSystem.manifest) !== JSON.stringify(manifest)) {
+        next = new WasixShell(dc, { kind: "system", base: shellOrigin, manifest }, status);
+        await next.warmup();
+      }
+    } catch (e: any) {
+      await next?.close();
+      throw new Error(`rollback refused: the system at /nix@${entryId.slice(0, 8)} does not start: ${e.message}`);
+    }
+  }
   const id = await dc.rollback(comb, entryId, { ...author(), harness: "timeline", model: "" });
   post({ type: "history", comb, objectCount: dc.objectCount() });
-  if (comb === NIX_COMB) await switchSystem("rollback");
+  if (manifest) await adoptSystem(next, manifest, id, "rollback");
   // Tell the model, as part of the transcript, so it survives a reload and shows in the console.
   if (agent) {
     agent.state.messages = [
@@ -432,16 +524,19 @@ async function handle(req: Request): Promise<unknown> {
       status(`$ ${req.command}`, true);
       let res;
       try {
-        res = await (await currentShell()).run(req.command, { cwd: CWD, timeoutMs: req.timeoutMs });
+        res = await (await currentShell()).run(req.command, { cwd: CWD, timeoutMs: req.timeoutMs, machine: await machineSnapshot(machineSources), by: "shell" });
       } finally {
         status("shell ready", false);
       }
+      let refused = "";
       for (const comb of res.changed) {
-        const id = await dc.commit(comb, { kind: "external" }, { session: sessionId, harness: "shell", model: "", principal: "user" });
-        if (id) post({ type: "history", comb, objectCount: dc.objectCount() });
-        if (id && comb === NIX_COMB) await switchSystem("commit from the shell");
+        try {
+          await commitComb(comb, { kind: "external" }, { session: sessionId, harness: "shell", model: "", principal: "user" }, "commit from the shell");
+        } catch (e: any) {
+          refused += `\n${e.message}`;
+        }
       }
-      return { output: res.output, exitCode: res.exitCode };
+      return { output: res.output + refused, exitCode: refused ? 1 : res.exitCode };
     }
     case "wipe":
       await dc.wipe();
@@ -452,10 +547,7 @@ async function handle(req: Request): Promise<unknown> {
       // An edit made by you in the page's editor: outside any tool call, so an "external" entry.
       if (agent?.state.isStreaming) throw new Error("wait for the agent to finish");
       dc.writeFile(req.comb, req.path, req.content);
-      const id = await dc.commit(req.comb, { kind: "external" }, { session: sessionId, harness: "editor", model: "", principal: "user" });
-      post({ type: "history", comb: req.comb, objectCount: dc.objectCount() });
-      if (id && req.comb === NIX_COMB) await switchSystem("commit from the editor");
-      return id;
+      return commitComb(req.comb, { kind: "external" }, { session: sessionId, harness: "editor", model: "", principal: "user" }, "commit from the editor");
     }
     case "debugTool": {
       const tool = agent?.state.tools.find((t) => t.name === req.name);

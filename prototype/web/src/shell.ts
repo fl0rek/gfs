@@ -31,6 +31,10 @@ export interface RunOptions {
   onData?: (chunk: string) => void;
   cwd: string;
   env?: Record<string, string>;
+  /** /machine contents to expose in the sandbox, path → text. */
+  machine?: Record<string, string>;
+  /** Who runs this ("tool:<id>", "shell"), for the process log. */
+  by?: string;
 }
 
 export interface RunResult {
@@ -47,6 +51,27 @@ export interface Shell {
   close(): Promise<void>;
   /** Commands the shell's sandbox offers, once warmed up. */
   commands(): string[];
+  /** Installed packages, with how many commands each provides. */
+  packages(): { id: string; commands: number }[];
+  bootedAt: number | null;
+}
+
+/** Commands spawned in any sandbox so far (a ring of the last 200). */
+export const processLog: import("./machine").ProcessRecord[] = [];
+let nextPid = 1;
+
+/** The runtime's own heap: the SDK's WebAssembly.Memory, via the cached glue module. */
+export async function runtimeHeapBytes(): Promise<number | null> {
+  try {
+    const url = import.meta.env.DEV
+      ? "/node_modules/@wasmer/sdk/pkg/wasmer_sdk_js.js"
+      : new URL(`${import.meta.env.BASE_URL}wasmer-sdk/pkg/wasmer_sdk_js.js`, self.location.href).href;
+    const glue: any = await import(/* @vite-ignore */ url);
+    const exports = await glue.default(); // already initialised by the SDK: returns the exports
+    return exports?.memory?.buffer?.byteLength ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -125,6 +150,8 @@ export class WasixShell implements Shell {
   private extraPkgs: Package[] = [];
   private commandName = "bash";
   private ready: Promise<void> | null = null;
+  bootedAt: number | null = null;
+  private machineFiles = new Set<string>();
   /** What the sandbox currently holds per comb: path → blob hash. */
   private mirrored = new Map<string, Map<string, string>>();
 
@@ -152,6 +179,10 @@ export class WasixShell implements Shell {
     const all = new Set<string>();
     for (const p of [this.pkg, ...this.extraPkgs]) for (const c of p?.commands ?? []) all.add(c);
     return [...all].sort();
+  }
+
+  packages() {
+    return [this.pkg, ...this.extraPkgs].filter((p): p is Package => !!p).map((p) => ({ id: p.id, commands: p.commands.length }));
   }
 
   private async boot() {
@@ -206,15 +237,19 @@ export class WasixShell implements Shell {
     this.status("creating sandbox…", true);
     // Dependencies first, so the shell's `use` edges resolve against what is already installed.
     this.sandbox = await this.wasmer.sandboxes.create({ packages: [...this.extraPkgs, this.pkg] });
-    for (const d of [`${STAGE}/datacombs`, `${STAGE}/nix`]) await this.sandbox.fs.mkdir(d, { recursive: true }).catch(() => {});
+    for (const d of [`${STAGE}/datacombs`, `${STAGE}/nix`, `${STAGE}/machine`]) await this.sandbox.fs.mkdir(d, { recursive: true }).catch(() => {});
     this.mirrored.clear();
+    this.bootedAt = Date.now();
     this.status("shell ready", false);
   }
 
   async run(command: string, opts: RunOptions): Promise<RunResult> {
     await this.warmup();
     const sandbox = this.sandbox!;
-    await this.syncIn();
+    await this.syncIn(opts.machine ?? {});
+    const rec: import("./machine").ProcessRecord = { id: nextPid++, command, started: Date.now(), ms: null, exit: null, changed: [], by: opts.by ?? "shell" };
+    processLog.push(rec);
+    if (processLog.length > 200) processLog.shift();
     const env = {
       HOME: opts.cwd,
       PWD: opts.cwd,
@@ -242,14 +277,21 @@ export class WasixShell implements Shell {
       if (opts.signal?.aborted) throw new Error("Command aborted");
       if (out.reason === "timeout") throw new Error(`Command timed out after ${(opts.timeoutMs ?? 0) / 1000} seconds`);
       const changed = await this.syncOut();
+      rec.ms = Date.now() - rec.started;
+      rec.exit = out.exitCode;
+      rec.changed = changed;
       return { output: chunks.join(""), exitCode: out.exitCode, changed };
+    } catch (e) {
+      rec.ms = Date.now() - rec.started;
+      rec.exit = -1;
+      throw e;
     } finally {
       opts.signal?.removeEventListener("abort", onAbort);
     }
   }
 
-  /** Bring every comb up to date in the sandbox's staging mirror. */
-  private async syncIn() {
+  /** Bring every comb (and a /machine snapshot) up to date in the sandbox's staging mirror. */
+  private async syncIn(machine: Record<string, string>) {
     const fs = this.sandbox!.fs;
     const combs = this.dc.listCombs();
     // combs that vanished (not expected, but keep the mirror honest)
@@ -274,6 +316,10 @@ export class WasixShell implements Shell {
       }
       this.mirrored.set(comb, want);
     }
+    // /machine: rewritten every time; small
+    for (const name of this.machineFiles) if (!(name in machine)) await fs.remove(`${STAGE}/machine/${name}`).catch(() => {});
+    for (const [name, text] of Object.entries(machine)) await fs.writeText(`${STAGE}/machine/${name}`, text);
+    this.machineFiles = new Set(Object.keys(machine));
   }
 
   /** Write back what the command changed under any comb. Returns the combs that changed. */
@@ -338,6 +384,7 @@ const outDir = (comb: string) => `${STAGE}/out${combDir(comb)}`;
 const WRAPPER = [
   `cp -a ${STAGE}/datacombs /datacombs || echo "gfs: could not materialise /datacombs" >&2`,
   `cp -a ${STAGE}/nix /nix || echo "gfs: could not materialise /nix" >&2`,
+  `cp -a ${STAGE}/machine /machine 2>/dev/null`,
   'cd "$GFS_CWD" 2>/dev/null || cd /datacombs/workspace',
   'bash -c "$GFS_CMD"',
   "rc=$?",
@@ -355,7 +402,11 @@ function bytesEqual(a: Uint8Array, b: Uint8Array) {
 
 /** Used until the WASIX shell is wanted, or when it cannot start. */
 export class UnavailableShell implements Shell {
+  bootedAt = null;
   constructor(private reason: string) {}
+  packages() {
+    return [];
+  }
   get unavailable() {
     return this.reason;
   }

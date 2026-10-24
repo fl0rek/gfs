@@ -25,10 +25,10 @@ await page.evaluate(() => {
 });
 await page.waitForFunction(() => [...document.querySelectorAll(".editor button")].some((b) => b.textContent === "Save & commit" && !b.disabled));
 await page.evaluate(() => [...document.querySelectorAll(".editor button")].find((b) => b.textContent === "Save & commit").click());
-await page.waitForFunction((n) => window.__pi.state().logs.nix?.length === n + 1, { timeout: 60000 }, before.length);
+await page.waitForFunction((n) => window.__pi.state().logs.nix?.length >= n + 2, { timeout: 60000 }, before.length);
 const after = await call({ method: "log", comb: "nix" });
-check(after[0].kind === "external" && after[0].author.harness === "editor", `external entry by the editor (${after[0].kind}/${after[0].author.harness})`);
-await page.waitForFunction((id) => window.__pi.state().info.system?.entry === id, { timeout: 60000 }, after[0].id);
+check(after[1].kind === "external" && after[1].author.harness === "editor" && after[0].kind === "switch", `external entry by the editor, then the switch (${after[1].kind}/${after[1].author.harness})`);
+await page.waitForFunction((id) => window.__pi.state().info.system?.entry === id, { timeout: 60000 }, after[1].id);
 const st = await page.evaluate(() => window.__pi.state());
 check(st.info.system.name === "edited by hand in the browser", `system switched: ${st.info.system.name}`);
 await page.screenshot({ path: process.env.SHOT ?? "editor.png" });

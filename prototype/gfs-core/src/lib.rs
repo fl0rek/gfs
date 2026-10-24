@@ -156,6 +156,12 @@ impl Gfs {
         to_js(&self.inner.list_all(comb).map_err(js)?)
     }
 
+    /// Discard the working tree's changes: back to head's tree.
+    #[wasm_bindgen(js_name = resetWorking)]
+    pub fn reset_working(&mut self, comb: &str) -> JsResult<()> {
+        self.inner.reset_working(comb).map_err(js)
+    }
+
     /// Changes in the working tree relative to head.
     pub fn status(&self, comb: &str) -> JsResult<JsValue> {
         to_js(&self.inner.status(comb).map_err(js)?)

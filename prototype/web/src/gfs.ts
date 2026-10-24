@@ -134,6 +134,9 @@ export class Datacombs {
   status(comb: string) {
     return this.gfs.status(comb) as FileDiff[];
   }
+  resetWorking(comb: string) {
+    this.gfs.resetWorking(comb);
+  }
 
   // ----- history -----
   putBlob(bytes: Uint8Array | string) {

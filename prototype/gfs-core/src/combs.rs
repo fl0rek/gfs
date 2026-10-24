@@ -144,6 +144,15 @@ impl Datacombs {
         Ok(())
     }
 
+    /// Discard the working tree's changes: back to head's tree.
+    pub fn reset_working(&mut self, comb: &str) -> Result<()> {
+        let head = self.head(comb)?;
+        let entry = self.entry(&head)?;
+        let flat = self.flatten_tree(&entry.tree, "")?;
+        self.working.insert(comb.to_string(), flat);
+        Ok(())
+    }
+
     fn wt(&self, comb: &str) -> Result<&Flat> {
         self.working.get(comb).ok_or_else(|| GfsError::NoComb(comb.to_string()))
     }

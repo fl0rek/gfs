@@ -35,13 +35,13 @@ let config: ModelConfig = loadConfig();
 
 function loadConfig(): ModelConfig {
   try {
-    const s = sessionStorage.getItem("pi-on-gfs.config");
+    const s = localStorage.getItem("pi-on-gfs.config") ?? sessionStorage.getItem("pi-on-gfs.config");
     if (s) return JSON.parse(s);
   } catch {}
   return { provider: "mock", model: "scripted-agent", apiKey: "" };
 }
 function saveConfig() {
-  sessionStorage.setItem("pi-on-gfs.config", JSON.stringify(config));
+  localStorage.setItem("pi-on-gfs.config", JSON.stringify(config));
 }
 
 // ---------- helpers ----------
@@ -412,13 +412,13 @@ function renderConfig() {
       ),
       h("label", {}, "model", h("input", { value: config.model, onInput: (e: any) => (config.model = e.target.value) })),
       config.provider === "openai-compatible" ? h("label", {}, "base URL", h("input", { value: config.baseUrl ?? "", placeholder: "https://host/v1", onInput: (e: any) => (config.baseUrl = e.target.value) })) : null,
-      config.provider === "free" ? renderFreeKeys() : config.provider !== "mock" ? h("label", {}, "API key (kept in sessionStorage only)", h("input", { type: "password", value: config.apiKey, onInput: (e: any) => (config.apiKey = e.target.value) })) : null,
+      config.provider === "free" ? renderFreeKeys() : config.provider !== "mock" ? h("label", {}, "API key (kept in this browser's localStorage)", h("input", { type: "password", value: config.apiKey, onInput: (e: any) => (config.apiKey = e.target.value) })) : null,
       h("div", { class: "row" },
         h("button", { onClick: applyConfig }, "Apply"),
         h("button", { onClick: () => worker.call({ method: "shellWarmup" }).catch((e) => { error = e.message; render(); }) }, "Start bash now"),
         h("button", { class: "danger", onClick: wipe }, "Wipe browser storage"),
       ),
-      h("p", { class: "muted small" }, "The key goes straight from this tab to the provider; CORS is the provider's call. Requests are made from the worker."),
+      h("p", { class: "muted small" }, "Keys go straight from this tab to the provider and are kept in this browser's localStorage. Requests are made from the worker."),
     ),
   );
 }
@@ -439,7 +439,7 @@ async function refreshFreeStatus() {
 function renderFreeKeys(): Node {
   config.freeKeys ??= {};
   return h("div", { class: "free" },
-    h("p", { class: "muted small" }, "Rides whichever free tier is up, from ", h("a", { href: "https://github.com/anus-dev/ANUS", target: "_blank" }, "ANUS"), "'s ranked list. Keys are still needed; they stay in sessionStorage."),
+    h("p", { class: "muted small" }, "Rides whichever free tier is up, from ", h("a", { href: "https://github.com/anus-dev/ANUS", target: "_blank" }, "ANUS"), "'s ranked list. Keys are still needed; they stay in this browser's localStorage."),
     FREE_PROVIDERS.map(([id, name, url]) =>
       h("label", {}, h("span", {}, name, " ", h("a", { href: url, target: "_blank", class: "muted" }, "(get a key)")),
         h("input", { type: "password", value: config.freeKeys![id] ?? "", placeholder: "no key", onInput: (e: any) => (config.freeKeys![id] = e.target.value) }))),

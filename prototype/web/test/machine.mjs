@@ -1,0 +1,34 @@
+// /machine: readable by pi and by bash, generated on read, read-only.
+import puppeteer from "puppeteer-core";
+const browser = await puppeteer.launch({ executablePath: process.env.CHROME ?? "/opt/pw-browsers/chromium-1248/chrome-linux64/chrome", headless: true, protocolTimeout: 180000, args: ["--no-sandbox", "--disable-gpu"] });
+const page = await browser.newPage();
+page.on("pageerror", (e) => console.log(`  [pageerror] ${e.message}`));
+let failures = 0;
+const check = (c, m) => { console.log(`${c ? "ok " : "FAIL"} ${m}`); if (!c) failures++; };
+const call = (req) => page.evaluate((r) => window.__pi.worker.call(r), req);
+const tool = (name, params) => call({ method: "debugTool", name, params });
+const text = (r) => r.content.map((c) => c.text).join("");
+await page.goto("http://localhost:4173/", { waitUntil: "load" });
+await page.waitForFunction(() => window.__pi.state().info?.system, { timeout: 180000 });
+const index = text(await tool("read", { path: "/machine" }));
+check(/session[\s\S]*runtime[\s\S]*storage/.test(index), `index: ${index.trim().split("\n").join(" ")}`);
+const runtime = JSON.parse(text(await tool("read", { path: "/machine/runtime" })));
+check(typeof runtime.heapBytes === "number" && runtime.heapBytes > 1e6, `runtime heap ${Math.round(runtime.heapBytes / 1048576)} MiB, sdk ${runtime.sdk}, isolated=${runtime.crossOriginIsolated}, cores=${runtime.host.hardwareConcurrency}`);
+const shell = JSON.parse(text(await tool("read", { path: "/machine/shell" })));
+check(shell.ready && shell.commands.length > 100 && shell.packages.length === 1 && shell.bootedAt, `shell: ${shell.commands.length} commands from ${shell.packages.length} package(s), booted ${new Date(shell.bootedAt).toISOString()}`);
+await tool("bash", { command: "echo one > a.txt" });
+const procs = text(await tool("read", { path: "/machine/processes" }));
+check(/tool:debug-\S+\t.*\t\d+\t0\tworkspace\techo one > a.txt/.test(procs), `processes log has the bash call with its changed comb:\n  ${procs.trim().split("\n").slice(-1)[0]}`);
+const storage = JSON.parse(text(await tool("read", { path: "/machine/storage" })));
+check(storage.combs.some((c) => c.name === "workspace" && c.files === 1) && storage.objects > 0 && storage.opfs?.usage >= 0, `storage: ${storage.objects} objects, OPFS ${storage.opfs?.usage} B of ${Math.round((storage.opfs?.quota ?? 0) / 1e9)} GB`);
+const agent = JSON.parse(text(await tool("read", { path: "/machine/agent" })));
+check(agent.model === "mock/scripted-agent" && typeof agent.usage.input === "number", `agent: ${agent.model}, ${agent.toolCalls} tool calls, usage ${JSON.stringify(agent.usage)}`);
+const sh = await tool("bash", { command: "ls /machine; cat /machine/uptime; head -3 /machine/system; echo nope > /machine/uptime; cat /machine/uptime" });
+check(/session/.test(text(sh)) && /^\d+$/m.test(text(sh)) && /"entry"/.test(text(sh)), "bash sees /machine");
+const again = await tool("bash", { command: "cat /machine/uptime" });
+check(!/nope/.test(text(again)), "a write to /machine is dropped");
+let err = ""; try { await tool("write", { path: "/machine/uptime", content: "x" }); } catch (e) { err = e.message; }
+check(/read-only/.test(err), `pi's write tool is refused: ${err}`);
+await browser.close();
+console.log(failures ? `${failures} FAILED` : "all checks passed");
+process.exit(failures ? 1 : 0);

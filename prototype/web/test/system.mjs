@@ -39,13 +39,16 @@ check(!ls.isError && /still alive/.test(text(ls)), "bash works after the switch"
 // 2. a bad hash → refused, old system keeps running
 const m2 = JSON.parse(text(await tool("read", { path: "/nix/machine.json" })));
 const corrupt = { ...m2, packages: m2.packages.map((p, i) => (i === 0 ? { ...p, sha256: "0".repeat(64) } : p)) };
-await tool("write", { path: "/nix/machine.json", content: JSON.stringify(corrupt, null, 2) + "\n" });
+let toolErr = "";
+try { await tool("write", { path: "/nix/machine.json", content: JSON.stringify(corrupt, null, 2) + "\n" }); } catch (e) { toolErr = e.message; }
 await new Promise((r) => setTimeout(r, 500));
 const after2 = await call({ method: "log", comb: "nix" });
 st = await page.evaluate(() => window.__pi.state());
-check(after2.length === after1.length + 1 && after2[0].kind !== "switch", "the bad manifest is still recorded as history, with no switch entry");
-check(st.info.system.entry === after1[1].id, "but the running system did not change");
-check(/refused|mismatch/.test(st.error ?? ""), `and the refusal is reported: ${st.error?.slice(0, 100)}`);
+check(after2.length === after1.length, "the bad manifest was NOT committed (head = running system)");
+check(st.info.system.entry === after1[1].id, "and the running system did not change");
+check(/refused|mismatch/.test(toolErr), `the tool got the refusal: ${toolErr.slice(0, 100)}`);
+const m3 = JSON.parse(text(await tool("read", { path: "/nix/machine.json" })));
+check(m3.packages[0].sha256 !== "0".repeat(64), "the working tree was reverted to the running manifest");
 const ls2 = await tool("bash", { command: "echo survivor" });
 check(!ls2.isError && /survivor/.test(text(ls2)), "bash still works on the old system");
 
@@ -54,8 +57,8 @@ await call({ method: "rollback", comb: "nix", entryId: after1[1].id });
 await new Promise((r) => setTimeout(r, 1500));
 const after3 = await call({ method: "log", comb: "nix" });
 st = await page.evaluate(() => window.__pi.state());
-check(after3[0].kind === "rollback", "rollback entry on /nix");
-check(st.info.system.name === "renamed system" && st.info.system.entry === after3[0].id, `rollback switched the system (now /nix@${after3[0].id.slice(0, 8)})`);
+check(after3[1].kind === "rollback" && after3[0].kind === "switch" && after3[0].at_entry === after3[1].id, "rollback entry on /nix, then its switch record");
+check(st.info.system.name === "renamed system" && st.info.system.entry === after3[1].id, `rollback switched the system (now /nix@${after3[1].id.slice(0, 8)})`);
 const ws = await page.evaluate(() => { const sel = document.querySelector(".pane.timeline select"); sel.value = "workspace"; sel.dispatchEvent(new Event("change")); return true; });
 await new Promise((r) => setTimeout(r, 500));
 const tags = await page.$$eval(".item.entry .tag", (els) => els.map((e) => e.textContent));
@@ -65,7 +68,7 @@ check(tags.includes("system"), `the workspace timeline shows the switch too (${t
 await page.reload({ waitUntil: "load" });
 await page.waitForFunction(() => window.__pi.state().info?.system || /unavailable|refused|failed/.test(window.__pi.state().statusText), { timeout: 180000 });
 st = await page.evaluate(() => window.__pi.state());
-check(st.info.system.entry === after3[0].id, "after reload the running system is the comb's head");
+check(st.info.system.entry === after3[1].id, "after reload the running system is what the last switch recorded");
 
 await browser.close();
 console.log(failures ? `${failures} FAILED` : "all checks passed");
