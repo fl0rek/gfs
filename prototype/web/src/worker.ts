@@ -11,9 +11,9 @@ import { opencodeProvider } from "@earendil-works/pi-ai/providers/opencode";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { Datacombs } from "./gfs";
 import { makeTools } from "./tools";
-import { WasixShell, UnavailableShell, installRegistryShim, type Shell } from "./shell";
+import { WasixShell, UnavailableShell, installRegistryShim, loadDeployedSystem, type Shell, type SystemManifest } from "./shell";
 import { createMockProvider, MOCK_MODEL_ID, MOCK_PROVIDER_ID } from "./mock-model";
-import { CWD, WORKSPACE } from "./paths";
+import { CWD, WORKSPACE, NIX_COMB, resolvePath } from "./paths";
 import type { Author, BridgeInbound, EntryDetail, InitInfo, ModelConfig, Notification, Reply, Request } from "./protocol";
 import { installBridge, onBridgeEvent, setBridgeAvailable, smartFetch, egressMode } from "./egress";
 
@@ -29,6 +29,10 @@ let config: ModelConfig = { provider: "mock", model: MOCK_MODEL_ID, apiKey: "" }
 let sessionId = "";
 let turnIndex = 0;
 let currentTurnId = "";
+const startedAt = Date.now();
+/** The system the shell is running: the /nix comb's machine.json as of the entry it was switched at. */
+let runningSystem: { manifest: SystemManifest; entry: string; switchedAt: number } | null = null;
+let shellOrigin: URL = new URL(import.meta.env.BASE_URL, self.location.href);
 const mock = createMockProvider();
 
 const post = (n: Notification) => self.postMessage(n);
@@ -63,12 +67,31 @@ async function init(shellParam?: string): Promise<InitInfo> {
   } else if (shellParam === "registry") {
     shell = new WasixShell(dc, { kind: "registry", name: BASH_PACKAGE }, status);
   } else {
-    // Default: the pinned .webc files served from our own origin (fetched at build time).
-    const base = new URL(`${import.meta.env.BASE_URL}packages/`, self.location.href);
-    const index = await (await fetch(new URL("index.json", base))).json();
-    installRegistryShim(base, index);
-    const urls = Object.values(index.packages as Record<string, string>).map((sha) => new URL(`${sha}.webc`, base).href);
-    shell = new WasixShell(dc, { kind: "bundled", urls }, status);
+    // Default: whatever /nix says. The comb is seeded from the system this build deployed.
+    const deployed = await loadDeployedSystem(shellOrigin);
+    installRegistryShim(new URL("packages/", shellOrigin), { packages: Object.fromEntries(deployed.manifest.packages.map((p) => [p.name, p.sha256])), registry: deployed.registry });
+    if (!dc.hasComb(NIX_COMB)) {
+      await dc.createComb(NIX_COMB, { session: sessionId, harness: "system", model: "", principal: "user" });
+      dc.writeFile(NIX_COMB, "flake.nix", deployed.flake);
+      dc.writeFile(NIX_COMB, "machine.json", JSON.stringify(deployed.manifest, null, 2) + "\n");
+      dc.writeFile(
+        NIX_COMB,
+        "README.md",
+        [
+          "# /nix — the running system",
+          "",
+          "This comb holds the flake of the system this session runs on.",
+          "",
+          "- `machine.json` is the built system: the packages the shell sandbox loads, each pinned by sha256. Change it and commit (any tool call that edits it does) and the shell is rebuilt from the new manifest: that is the switch. A package whose bytes don't match its hash is refused and the old system keeps running.",
+          "- `flake.nix` is the source of that system. The browser cannot run `nix build`; CI (or your machine) builds the flake and publishes the result, which then lands here as a new `machine.json`.",
+          "",
+          "Every switch is a history entry of this comb, so `/proc/system` and the timeline show which system was running when.",
+          "",
+        ].join("\n"),
+      );
+      await dc.commit(NIX_COMB, { kind: "external" }, { session: sessionId, harness: "system", model: "", principal: "user" });
+    }
+    await switchSystem("boot");
   }
 
   buildAgent(restoreTranscript());
@@ -79,7 +102,69 @@ async function init(shellParam?: string): Promise<InitInfo> {
     persistence: dc.persistence,
     objectCount: dc.objectCount(),
     config,
+    system: runningSystem ? { entry: runningSystem.entry, name: runningSystem.manifest.name ?? "" } : null,
   };
+}
+
+/** Rebuild the shell from /nix/machine.json. Called at boot and after every history entry on the nix comb. */
+async function switchSystem(reason: string): Promise<boolean> {
+  const head = dc.head(NIX_COMB);
+  let manifest: SystemManifest;
+  try {
+    manifest = JSON.parse(dc.readText(NIX_COMB, "machine.json"));
+    if (!manifest.shell || !Array.isArray(manifest.packages)) throw new Error("machine.json needs {shell, packages[]}");
+  } catch (e: any) {
+    status(`/nix/machine.json is invalid (${e.message}); keeping the running system`, false);
+    post({ type: "error", message: `switch refused: ${e.message}` });
+    return false;
+  }
+  if (runningSystem && JSON.stringify(runningSystem.manifest) === JSON.stringify(manifest)) {
+    // Same built system at a newer entry (flake.nix edited, or a rollback to an identical manifest): nothing to rebuild.
+    runningSystem.entry = head;
+    post({ type: "system", entry: head, name: manifest.name ?? "", reason: `${reason}; same packages, no rebuild` });
+    return false;
+  }
+  const next = new WasixShell(dc, { kind: "system", base: shellOrigin, manifest }, status);
+  try {
+    await next.warmup();
+  } catch (e: any) {
+    status(`switch refused: ${e.message}`, false);
+    post({ type: "error", message: `switch to /nix@${head.slice(0, 8)} refused: ${e.message}` });
+    await next.close();
+    return false;
+  }
+  const old = shell;
+  shell = next;
+  runningSystem = { manifest, entry: head, switchedAt: Date.now() };
+  await old.close();
+  if (agent) agent.state.tools = makeToolsFor();
+  status(`system: /nix@${head.slice(0, 8)} (${reason})`, false);
+  post({ type: "system", entry: head, name: manifest.name ?? "", reason });
+  return true;
+}
+
+/** /proc: the running session, generated on read. */
+function procEntries(): Record<string, () => string> {
+  const j = (v: unknown) => JSON.stringify(v, null, 2) + "\n";
+  return {
+    "session": () => j({ id: sessionId, node: NODE, started: new Date(startedAt).toISOString(), turn: currentTurnId || null, turns: turnIndex, harness: "pi", model: `${config.provider}/${config.model}` }),
+    "model": () => `${config.provider}/${config.model}\n`,
+    "turn": () => (currentTurnId || "") + "\n",
+    "combs": () => dc.listCombs().map((c) => `${c}\t${dc.head(c)}`).join("\n") + "\n",
+    "system": () =>
+      j(runningSystem ? { entry: runningSystem.entry, path: `/nix@${runningSystem.entry}`, switched: new Date(runningSystem.switchedAt).toISOString(), name: runningSystem.manifest.name ?? null, shell: runningSystem.manifest.shell, packages: runningSystem.manifest.packages.map((p) => `${p.name} ${p.sha256.slice(0, 12)}`) } : { entry: null, note: "no system (shell disabled or not switched yet)" }),
+    "shell": () => j({ ready: shell instanceof WasixShell, commands: shell.commands() }),
+    "egress": () => egressMode() + "\n",
+    "mounts": () => ["/datacombs\tdatacombs\trw", "/nix\tcomb nix\trw (commit = switch)", "/proc\tproc\tro"].join("\n") + "\n",
+    "uptime": () => `${Math.round((Date.now() - startedAt) / 1000)}\n`,
+  };
+}
+function procRead(path: string): string {
+  const entries = procEntries();
+  if (path === "") return Object.keys(entries).join("\n") + "\n";
+  const f = entries[path];
+  if (!f) throw new Error(`/proc/${path}: not found`);
+  return f();
 }
 
 function restoreTranscript(): AgentMessage[] {
@@ -116,7 +201,9 @@ function systemPrompt() {
     "</rules>",
     "",
     "<environment>",
-    `Your working directory is ${CWD}. It is a comb: a versioned directory whose every tool call becomes one history entry. The past is readable at ${CWD}@<entry-id>/<path>. Nothing outside /datacombs exists. bash runs in a WASIX sandbox over the same directory (GNU bash + coreutils: ls, cat, head, tail, wc, sort, cut, tr, date, mkdir, cp, mv, rm…; no grep, sed, awk, find or git). Its network is disabled. Prefer the read tool over cat.`,
+    `Your working directory is ${CWD}. It is a comb: a versioned directory whose every tool call becomes one history entry. The past is readable at ${CWD}@<entry-id>/<path>.`,
+    `/nix is the comb holding the running system's flake: machine.json lists the packages the shell sandbox runs, pinned by sha256; editing it (any tool call that changes it) switches the system; flake.nix is its source but cannot be built here. /proc is read-only and describes this session: read /proc to list it (session, model, turn, combs, system, shell, egress, mounts).`,
+    `bash runs in a WASIX sandbox over ${CWD} only; what it has is in /proc/shell (GNU bash + coreutils by default: no grep, sed, awk, find or git). It has no network; use the fetch tool for HTTP. Prefer the read tool over cat.`,
     "</environment>",
     "",
     `<cwd>${CWD}</cwd>`,
@@ -156,15 +243,23 @@ function currentModel(): Model<any> {
   return m;
 }
 
-function buildAgent(messages: AgentMessage[]) {
-  const tools = makeTools({
+function makeToolsFor() {
+  return makeTools({
     dc,
     shell,
     fetch: smartFetch,
+    proc: procRead,
     author,
     turnId,
-    onEntry: (comb) => post({ type: "history", comb, objectCount: dc.objectCount() }),
+    onEntry: async (comb) => {
+      post({ type: "history", comb, objectCount: dc.objectCount() });
+      if (comb === NIX_COMB) await switchSystem("commit by tool call");
+    },
   });
+}
+
+function buildAgent(messages: AgentMessage[]) {
+  const tools = makeToolsFor();
   agent = new Agent({
     initialState: { systemPrompt: systemPrompt(), model: currentModel(), tools, messages },
     streamFn: (model, context, options) =>
@@ -235,6 +330,7 @@ async function rollback(comb: string, entryId: string) {
   if (agent?.state.isStreaming) throw new Error("wait for the agent to finish");
   const id = await dc.rollback(comb, entryId, { ...author(), harness: "timeline", model: "" });
   post({ type: "history", comb, objectCount: dc.objectCount() });
+  if (comb === NIX_COMB) await switchSystem("rollback");
   // Tell the model, as part of the transcript, so it survives a reload and shows in the console.
   if (agent) {
     agent.state.messages = [
@@ -302,6 +398,12 @@ async function handle(req: Request): Promise<unknown> {
     case "wipe":
       await dc.wipe();
       return null;
+    case "debugTool": {
+      const tool = agent?.state.tools.find((t) => t.name === req.name);
+      if (!tool) throw new Error(`no tool ${req.name}`);
+      const params = tool.prepareArguments ? tool.prepareArguments(req.params) : req.params;
+      return tool.execute(`debug-${Date.now()}`, params);
+    }
     case "debugFetch": {
       try {
         const r = await smartFetch(req.url);

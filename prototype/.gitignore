@@ -6,3 +6,4 @@ web/.vite/
 web/e2e.png
 web/shot.png
 web/public/packages/*.webc
+web/public/system/

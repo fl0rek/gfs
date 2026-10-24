@@ -34,6 +34,9 @@ export interface RunResult {
 export interface Shell {
   run(comb: string, command: string, opts: RunOptions): Promise<RunResult>;
   warmup(): Promise<void>;
+  close(): Promise<void>;
+  /** Commands the shell's sandbox offers, once warmed up. */
+  commands(): string[];
 }
 
 /**
@@ -69,11 +72,48 @@ export function installRegistryShim(base: URL, index: { packages: Record<string,
   }) as typeof fetch;
 }
 
+/**
+ * The running system, as /nix/machine.json describes it. Every package is pinned by
+ * sha256 and refused if the bytes differ. A `.webc` package brings its own commands;
+ * a raw `.wasm` module is one command.
+ */
+export interface SystemManifest {
+  /** Free-form label shown in /proc/system. */
+  name?: string;
+  shell: string;
+  packages: SystemPackage[];
+}
+export type SystemPackage =
+  | { kind: "webc"; name: string; url: string; sha256: string }
+  | { kind: "wasm"; name: string; url: string; sha256: string; command: string };
+
 export type ShellSource =
   | { kind: "registry"; name: string }
-  /** .webc files served from our own origin, pinned by sha256 (see scripts/fetch-packages.mjs). First one is the shell. */
-  | { kind: "bundled"; urls: string[] }
+  | { kind: "system"; base: URL; manifest: SystemManifest }
   | { kind: "module"; bytes: Uint8Array; command: string };
+
+export async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const d = await crypto.subtle.digest("SHA-256", bytes as BufferSource);
+  return Array.from(new Uint8Array(d), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** The default system: what the site deployed. */
+export async function loadDeployedSystem(base: URL): Promise<{ manifest: SystemManifest; flake: string; registry: Record<string, any> }> {
+  const index = await (await fetch(new URL("packages/index.json", base))).json();
+  const manifest: SystemManifest = {
+    name: "wasmer registry packages (bash + coreutils), served from this origin",
+    shell: "bash",
+    packages: Object.entries(index.packages as Record<string, string>).map(([name, sha256]) => ({
+      kind: "webc" as const,
+      name,
+      url: `packages/${sha256}.webc`,
+      sha256,
+    })),
+  };
+  const flakeRes = await fetch(new URL("system/flake.nix", base));
+  const flake = flakeRes.ok ? await flakeRes.text() : "# no flake deployed with this build\n";
+  return { manifest, flake, registry: index.registry ?? {} };
+}
 
 const dec = new TextDecoder();
 
@@ -98,6 +138,21 @@ export class WasixShell implements Shell {
     return this.ready;
   }
 
+  async close() {
+    try {
+      await this.sandbox?.close();
+      await this.wasmer?.close();
+    } catch {}
+    this.sandbox = null;
+    this.wasmer = null;
+  }
+
+  commands(): string[] {
+    const all = new Set<string>();
+    for (const p of [this.pkg, ...this.extraPkgs]) for (const c of p?.commands ?? []) all.add(c);
+    return [...all].sort();
+  }
+
   private async boot() {
     this.status("starting WASIX runtime…", true);
     const { Wasmer } = await loadSdk();
@@ -112,21 +167,33 @@ export class WasixShell implements Shell {
         },
       });
       this.commandName = this.pkg.entrypoint ?? "bash";
-    } else if (this.source.kind === "bundled") {
+    } else if (this.source.kind === "system") {
+      const { base, manifest } = this.source;
       const pkgs: Package[] = [];
-      for (const url of this.source.urls) {
-        const short = url.split("/").pop()!.slice(0, 8);
-        this.status(`fetching ${short}… (bundled WASIX package)`, true);
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`${url}: ${res.status}`);
+      const modules: Record<string, Uint8Array> = {};
+      const commands: Record<string, { module: string }> = {};
+      for (const p of manifest.packages) {
+        this.status(`fetching ${p.name}…`, true);
+        const res = await fetch(new URL(p.url, base));
+        if (!res.ok) throw new Error(`${p.name}: ${p.url} → ${res.status}`);
         const bytes = new Uint8Array(await res.arrayBuffer());
-        this.status(`loading ${short}…`, true);
-        pkgs.push(await this.wasmer.packages.load(bytes));
+        const got = await sha256Hex(bytes);
+        if (got !== p.sha256) throw new Error(`${p.name}: sha256 mismatch (manifest ${p.sha256.slice(0, 12)}…, got ${got.slice(0, 12)}…); refusing to run it`);
+        if (p.kind === "webc") {
+          this.status(`loading ${p.name}…`, true);
+          pkgs.push(await this.wasmer.packages.load(bytes));
+        } else {
+          modules[p.name] = bytes;
+          commands[p.command] = { module: p.name };
+        }
       }
-      this.pkg = pkgs[0];
-      this.extraPkgs = pkgs.slice(1);
-      console.log("bundled packages:", pkgs.map((p) => `${p.id} [${p.commands.length} cmds]`).join(", "));
-      this.commandName = this.pkg.commands.includes("bash") ? "bash" : this.pkg.entrypoint ?? this.pkg.commands[0];
+      if (Object.keys(modules).length) pkgs.push(await this.wasmer.packages.create({ modules, commands }));
+      const shellPkg = pkgs.find((p) => p.commands.includes(manifest.shell));
+      if (!shellPkg) throw new Error(`no package in the system provides the shell "${manifest.shell}"`);
+      this.pkg = shellPkg;
+      this.extraPkgs = pkgs.filter((p) => p !== shellPkg);
+      this.commandName = manifest.shell;
+      console.log("system packages:", pkgs.map((p) => `${p.id} [${p.commands.length} cmds]`).join(", "));
     } else {
       this.pkg = await this.wasmer.packages.create({
         modules: { app: this.source.bytes },
@@ -236,6 +303,10 @@ function bytesEqual(a: Uint8Array, b: Uint8Array) {
 export class UnavailableShell implements Shell {
   constructor(private reason: string) {}
   async warmup() {}
+  async close() {}
+  commands() {
+    return [];
+  }
   async run(): Promise<RunResult> {
     throw new Error(`bash is unavailable: ${this.reason}`);
   }

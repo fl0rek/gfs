@@ -41,6 +41,7 @@ header.top { display: flex; align-items: center; justify-content: space-between;
 .spinner { width: 10px; height: 10px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .error { background: #3a1d1d; color: #ffd0d0; padding: 8px 14px; border-bottom: 1px solid #5a2a2a; }
+.notice { background: #1d2a3a; color: #cfe3ff; padding: 6px 14px; border-bottom: 1px solid #2a3f5a; font-size: 13px; }
 .error.inline { border-radius: 6px; margin-top: 6px; }
 
 main.split { flex: 1; display: grid; grid-template-columns: minmax(360px, 1fr) minmax(420px, 1.2fr); min-height: 0; }

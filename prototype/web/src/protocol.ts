@@ -66,7 +66,8 @@ export type Request =
   | { id: number; method: "shellRun"; command: string; timeoutMs?: number }
   | { id: number; method: "wipe" }
   | { id: number; method: "bridgeAvailable"; available: boolean }
-  | { id: number; method: "debugFetch"; url: string };
+  | { id: number; method: "debugFetch"; url: string }
+  | { id: number; method: "debugTool"; name: string; params: unknown };
 
 /** Page → worker, outside the RPC: a response event from the egress bridge. */
 export interface BridgeInbound {
@@ -89,6 +90,7 @@ export interface InitInfo {
   persistence: "opfs" | "memory";
   objectCount: number;
   config: ModelConfig;
+  system: { entry: string; name: string } | null;
 }
 
 // Worker → page.
@@ -97,6 +99,7 @@ export type Notification =
   | { type: "history"; comb: string; objectCount: number } // the comb's history changed
   | { type: "status"; text: string; busy?: boolean }
   | { type: "error"; message: string }
-  | { type: "bridge"; reqId: number; req: import("./egress").BridgeRequest | null }; // null = abort
+  | { type: "bridge"; reqId: number; req: import("./egress").BridgeRequest | null } // null = abort
+  | { type: "system"; entry: string; name: string; reason: string }; // the running system switched
 
 export type Reply = { id: number; ok: true; result: unknown } | { id: number; ok: false; error: string };

@@ -1,7 +1,14 @@
 // PROTOTYPE. Fetch the WASIX packages the shell needs, pinned by sha256, into public/packages/.
 // Run at build time so the hosted site never depends on the Wasmer CDN at runtime.
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync, readFileSync, copyFileSync } from "node:fs";
+
+// The running system's source, deployed alongside so /nix can be seeded with it.
+const systemDir = new URL("../public/system/", import.meta.url);
+mkdirSync(systemDir, { recursive: true });
+const flakeSrc = new URL("../../machine/flake.nix", import.meta.url);
+if (existsSync(flakeSrc)) copyFileSync(flakeSrc, new URL("flake.nix", systemDir));
+else writeFileSync(new URL("flake.nix", systemDir), "# prototype/machine/flake.nix was not present at build time\n");
 
 // The exact query @wasmer/sdk 0.19.1 sends when resolving a dependency by name (captured from a browser run).
 const QUERY = readFileSync(new URL("./registry-query.graphql", import.meta.url), "utf8");

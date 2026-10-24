@@ -17,10 +17,12 @@ export interface ToolContext {
   dc: Datacombs;
   shell: Shell;
   fetch: typeof fetch;
+  /** /proc reader */
+  proc: (path: string) => string;
   author: () => Author;
   turnId: () => string;
   /** Called after a tool call produced a history entry. */
-  onEntry: (comb: string, entryId: string) => void;
+  onEntry: (comb: string, entryId: string) => void | Promise<void>;
 }
 
 const text = (t: string): AgentToolResult<undefined> => ({ content: [{ type: "text", text: t }], details: undefined });
@@ -54,14 +56,22 @@ async function commitAll(ctx: ToolContext, toolCallId: string, toolName: string,
       { kind: "tool_call", tool_call_id: toolCallId, turn_id: ctx.turnId(), tool_name: toolName, args_hash: argsHash },
       ctx.author(),
     );
-    if (id) ctx.onEntry(comb, id);
+    if (id) await ctx.onEntry(comb, id);
   }
 }
 
-function readBytes(dc: Datacombs, p: string): { bytes: Uint8Array; where: string } {
+function readBytes(ctx: ToolContext, p: string): { bytes: Uint8Array; where: string } {
   const r = resolvePath(p);
-  const bytes = r.at ? dc.readFileAt(r.at, r.path) : dc.readFile(r.comb, r.path);
+  if (r.kind === "proc") return { bytes: new TextEncoder().encode(ctx.proc(r.path)), where: displayPath(r) };
+  const bytes = r.at ? ctx.dc.readFileAt(r.at, r.path) : ctx.dc.readFile(r.comb, r.path);
   return { bytes, where: displayPath(r) };
+}
+
+function writable(p: string) {
+  const r = resolvePath(p);
+  if (r.kind === "proc") throw new Error(`${displayPath(r)} is read-only`);
+  if (r.at) throw new Error(`${displayPath(r)} is a read-only view of the past`);
+  return r;
 }
 
 const dec = new TextDecoder();
@@ -82,7 +92,7 @@ export function makeTools(ctx: ToolContext): AgentTool<any, any>[] {
     constrainedSampling: { type: "json_schema", strict: "prefer" },
     async execute(_id, params: any) {
       const { path, offset, limit } = params;
-      const { bytes } = readBytes(dc, path);
+      const { bytes } = readBytes(ctx, path);
       const content = dec.decode(bytes);
       const all = content.split("\n");
       const total = all.length;
@@ -133,8 +143,7 @@ export function makeTools(ctx: ToolContext): AgentTool<any, any>[] {
     constrainedSampling: { type: "json_schema", strict: "prefer" },
     async execute(_id, params: any) {
       const { path, content } = params;
-      const r = resolvePath(path);
-      if (r.at) throw new Error(`${displayPath(r)} is a read-only view of the past`);
+      const r = writable(path);
       dc.writeFile(r.comb, r.path, content);
       return text(`Successfully wrote to ${path}`);
     },
@@ -179,9 +188,8 @@ export function makeTools(ctx: ToolContext): AgentTool<any, any>[] {
     },
     async execute(_id, params: any) {
       const { path, edits } = params;
-      const r = resolvePath(path);
-      if (r.at) throw new Error(`${displayPath(r)} is a read-only view of the past`);
-      const original = dc.readText(r.comb, r.path).replace(/^﻿/, "");
+      const r = writable(path);
+      const original = dc.readText(r.comb, r.path).replace(/^\uFEFF/, "");
       const crlf = original.includes("\r\n");
       const base = crlf ? original.replace(/\r\n/g, "\n") : original;
       const spans: { start: number; end: number; newText: string }[] = [];

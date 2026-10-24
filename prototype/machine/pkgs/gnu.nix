@@ -25,6 +25,9 @@ wasix.mkDerivation ({
   # 2-argument opendirat() that wasi-libc declares in <dirent.h>; rename
   # gnulib's (used by fts.c in grep/findutils/coreutils).
   postPatch = (args.postPatch or "") + ''
+    # gnulib's test suite (gnulib-tests/) is in SUBDIRS and does not port to
+    # wasi (#error in getlocalename_l-unsafe.c); we do not run tests anyway.
+    sed -i -E 's/^(SUBDIRS *=.*) gnulib-tests( |$)/\1\2/' Makefile.in
     for f in $(grep -rl --include='*.c' --include='*.h' '\bopendirat\b' lib gnulib/lib 2>/dev/null); do
       sed -i -e 's/\bopendirat\b/gl_opendirat/g' -e 's/gl_opendirat\.h/opendirat.h/g' "$f"
     done

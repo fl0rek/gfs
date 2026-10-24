@@ -69,6 +69,7 @@ const textOf = (m: any) =>
 
 // ---------- egress bridge (extension) ----------
 let bridgeVersion: string | null = null;
+let systemNotice: string | null = null;
 window.addEventListener("message", (ev) => {
   if (ev.source !== window || !ev.data || ev.data.source !== "gfs-bridge-ext") return;
   const m = ev.data;
@@ -90,6 +91,10 @@ worker.on(async (n) => {
   if (n.type === "bridge") {
     if (n.req) window.postMessage({ source: "gfs-bridge", type: "fetch", id: n.reqId, url: n.req.url, init: n.req.init }, "*");
     else window.postMessage({ source: "gfs-bridge", type: "abort", id: n.reqId }, "*");
+  } else if (n.type === "system") {
+    if (info) info.system = { entry: n.entry, name: n.name };
+    systemNotice = `switched to /nix@${n.entry.slice(0, 8)} (${n.reason})`;
+    render();
   } else if (n.type === "status") {
     statusText = n.text;
     render();
@@ -244,9 +249,11 @@ function render() {
         h("span", {}, statusText),
         info ? h("span", { class: "muted" }, ` · ${info.persistence === "opfs" ? "persisted in OPFS" : "memory only"} · ${info.objectCount} objects`) : null,
         h("span", { class: "muted", title: bridgeVersion ? `egress extension v${bridgeVersion}: any URL` : "no egress extension: CORS applies" }, ` · egress: ${bridgeVersion ? "extension" : "direct only"}`),
+        info?.system ? h("span", { class: "muted mono", title: info.system.name }, ` · system /nix@${info.system.entry.slice(0, 8)}`) : null,
       ),
     ),
     error ? h("div", { class: "error" }, error, h("button", { class: "link", onClick: () => { error = null; render(); } }, "dismiss")) : null,
+    systemNotice ? h("div", { class: "notice" }, "system ", systemNotice, h("button", { class: "link", onClick: () => { systemNotice = null; render(); } }, "ok")) : null,
     h("main", { class: "split" }, renderConsole(), renderTimeline()),
   ));
 }
@@ -398,7 +405,7 @@ function renderTimeline() {
     h("div", { class: "pane-head" },
       h("h2", {}, "history"),
       h("select", { value: selectedComb, onChange: async (e: any) => { selectedComb = e.target.value; selectedEntry = null; detail = null; verify = null; await refreshLog(selectedComb); render(); } },
-        combs.map((c) => h("option", { value: c, selected: c === selectedComb }, `/datacombs/${c}`))),
+        combs.map((c) => h("option", { value: c, selected: c === selectedComb }, c === "nix" ? "/nix (running system)" : `/datacombs/${c}`))),
       h("button", { onClick: () => doVerify(selectedComb) }, "Verify chain"),
       verify ? h("span", { class: verify.ok ? "ok" : "warn" }, verify.ok ? ` ✓ ${verify.entries} entries, ${verify.objects_checked} objects hash correctly` : ` ✗ ${verify.problems.join("; ")}`) : null,
     ),
