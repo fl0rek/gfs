@@ -43,16 +43,16 @@ function script(context: TranscriptContext) {
     case 0:
       return fauxAssistantMessage([
         fauxText(`I'll start by writing that down.`),
-        fauxToolCall("write", { path: file, content: `# ${userText || "note"}\n\nPrompt ${n}, written by the scripted mock agent.\n` }),
+        fauxToolCall("write", { path: `workspace/${file}`, content: `# ${userText || "note"}\n\nPrompt ${n}, written by the scripted mock agent.\n` }),
       ]);
     case 1:
-      return fauxAssistantMessage([fauxToolCall("bash", { command: `ls -la && wc -c ${file} && echo "touched at $(date)" >> log.txt` })]);
+      return fauxAssistantMessage([fauxToolCall("bash", { command: `cd workspace && ls -la && wc -c ${file} && echo "touched at $(date)" >> log.txt` })]);
     case 2: {
       const bashFailed = lastResult?.isError;
       return fauxAssistantMessage([
         fauxText(bashFailed ? "bash isn't available here, so I'll edit directly." : "Now a precise edit."),
         fauxToolCall("edit", {
-          path: file,
+          path: `workspace/${file}`,
           edits: [{ oldText: "written by the scripted mock agent.", newText: "written by the scripted mock agent, then edited in place." }],
         }),
       ]);

@@ -16,9 +16,9 @@ const runtime = JSON.parse(text(await tool("read", { path: "/machine/runtime" })
 check(typeof runtime.heapBytes === "number" && runtime.heapBytes > 1e6, `runtime heap ${Math.round(runtime.heapBytes / 1048576)} MiB, sdk ${runtime.sdk}, isolated=${runtime.crossOriginIsolated}, cores=${runtime.host.hardwareConcurrency}`);
 const shell = JSON.parse(text(await tool("read", { path: "/machine/shell" })));
 check(shell.ready && shell.commands.length > 100 && shell.packages.length === 1 && shell.bootedAt, `shell: ${shell.commands.length} commands from ${shell.packages.length} package(s), booted ${new Date(shell.bootedAt).toISOString()}`);
-await tool("bash", { command: "echo one > a.txt" });
+await tool("bash", { command: "echo one > workspace/a.txt" });
 const procs = text(await tool("read", { path: "/machine/processes" }));
-check(/tool:debug-\S+\t.*\t\d+\t0\tworkspace\techo one > a.txt/.test(procs), `processes log has the bash call with its changed comb:\n  ${procs.trim().split("\n").slice(-1)[0]}`);
+check(/tool:debug-\S+\t.*\t\d+\t0\tworkspace\techo one > workspace\/a.txt/.test(procs), `processes log has the bash call with its changed comb:\n  ${procs.trim().split("\n").slice(-1)[0]}`);
 const storage = JSON.parse(text(await tool("read", { path: "/machine/storage" })));
 check(storage.combs.some((c) => c.name === "workspace" && c.files === 1) && storage.objects > 0 && storage.opfs?.usage >= 0, `storage: ${storage.objects} objects, OPFS ${storage.opfs?.usage} B of ${Math.round((storage.opfs?.quota ?? 0) / 1e9)} GB`);
 const agent = JSON.parse(text(await tool("read", { path: "/machine/agent" })));

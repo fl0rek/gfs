@@ -119,6 +119,9 @@ export class Datacombs {
   remove(comb: string, path: string) {
     return this.gfs.remove(comb, path);
   }
+  rename(comb: string, from: string, to: string) {
+    this.gfs.rename(comb, from, to);
+  }
   exists(comb: string, path: string) {
     return this.gfs.exists(comb, path);
   }

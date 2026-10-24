@@ -55,7 +55,8 @@ const byKey = Object.fromEntries(s2.models.map((m) => [m.key, m]));
 const groq = Object.values(byKey).find((m) => m.provider === "groq");
 const cer = Object.values(byKey).find((m) => m.provider === "cerebras");
 check(groq.state === "resting" && groq.until - Date.now() < 61_000, `groq rests a minute after 429 (${Math.round((groq.until - Date.now()) / 1000)}s)`);
-check(cer.state === "resting" && cer.until - Date.now() > 3_600_000 / 2, "cerebras rests until midnight after a quota error");
+const midnight = Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate() + 1);
+check(cer.state === "resting" && Math.abs(cer.until - midnight) < 120_000, `cerebras rests until UTC midnight after a quota error (${new Date(cer.until).toISOString()})`);
 check(/openrouter/.test(s2.routed ?? ""), `routed = ${s2.routed}`);
 
 // 3. a second prompt skips the resting ones

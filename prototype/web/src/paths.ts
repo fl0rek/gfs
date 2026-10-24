@@ -5,12 +5,12 @@
 //   /datacombs/<comb>@<entry>    that comb as it was at one history entry (read-only)
 //   /nix                         the comb holding the running system's flake; commit = switch
 //   /machine                     the node describing itself (read-only, generated on read)
-// The harness's cwd is `/datacombs/workspace`.
+// The harness's cwd is `/datacombs`; a relative path names a comb first (`workspace/notes.md`).
 
 export const DATACOMBS = "/datacombs";
 export const WORKSPACE = "workspace";
 export const NIX_COMB = "nix";
-export const CWD = `${DATACOMBS}/${WORKSPACE}`;
+export const CWD = DATACOMBS;
 
 export type Resolved =
   | {

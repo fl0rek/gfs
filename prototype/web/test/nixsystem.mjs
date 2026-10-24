@@ -20,6 +20,7 @@ const m = JSON.parse(text(await tool("read", { path: "/nix/machine.json" })));
 check(m.packages.every((p) => p.name.startsWith("nix:")), `every package is Nix-built (${m.packages.length} modules)`);
 const script = `
 set -e
+cd workspace
 bash --version | head -1
 mkdir -p src && printf 'alpha 1\\nbeta 2\\ngamma 3\\n' > src/data.txt && printf 'alpha 1\\nbeta 22\\ngamma 3\\n' > src/data2.txt
 grep -n beta src/data.txt

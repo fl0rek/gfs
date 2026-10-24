@@ -19,6 +19,7 @@ import { Datacombs, type EntryKind } from "./gfs";
 import { makeTools } from "./tools";
 import { WasixShell, UnavailableShell, installRegistryShim, loadDeployedSystem, processLog, runtimeHeapBytes, type Shell, type SystemManifest } from "./shell";
 import { readMachine, machineSnapshot, type MachineSources } from "./machine";
+import { GfsHostFs } from "./hostfs";
 import { createMockProvider, MOCK_MODEL_ID, MOCK_PROVIDER_ID } from "./mock-model";
 import { CWD, WORKSPACE, NIX_COMB, resolvePath } from "./paths";
 import type { Author, BridgeInbound, EntryDetail, InitInfo, ModelConfig, Notification, Reply, Request } from "./protocol";
@@ -93,7 +94,8 @@ function turnId() {
   return currentTurnId;
 }
 
-async function init(shellParam?: string): Promise<InitInfo> {
+async function init(shellParam?: string, trace?: boolean): Promise<InitInfo> {
+  if (trace) (globalThis as any).__hostfsTrace = true;
   await dc.open(NODE);
   sessionId = `pi-${new Date().toISOString().slice(0, 19).replace(/[-:]/g, "")}-${Math.random().toString(36).slice(2, 6)}`;
   if (!dc.hasComb(WORKSPACE)) await dc.createComb(WORKSPACE, author());
@@ -116,9 +118,9 @@ async function init(shellParam?: string): Promise<InitInfo> {
   else if (shellParam?.startsWith("module:")) {
     const [url, command] = shellParam.slice("module:".length).split(",");
     const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
-    shell = new WasixShell(dc, { kind: "module", bytes, command: command || "sh" }, status);
+    shell = new WasixShell(dc, { kind: "module", bytes, command: command || "sh" }, status, hostfs);
   } else if (shellParam === "registry") {
-    shell = new WasixShell(dc, { kind: "registry", name: BASH_PACKAGE }, status);
+    shell = new WasixShell(dc, { kind: "registry", name: BASH_PACKAGE }, status, hostfs);
   } else {
     // Default: whatever /nix says. The comb is seeded from the system this build deployed.
     const deployed = await loadDeployedSystem(shellOrigin);
@@ -181,7 +183,7 @@ async function commitComb(comb: string, kind: EntryKind, author: Author, reason:
     try {
       manifest = parseManifest(dc.readText(NIX_COMB, "machine.json"));
       if (!runningSystem || JSON.stringify(runningSystem.manifest) !== JSON.stringify(manifest)) {
-        next = new WasixShell(dc, { kind: "system", base: shellOrigin, manifest }, status);
+        next = new WasixShell(dc, { kind: "system", base: shellOrigin, manifest }, status, hostfs);
         await next.warmup();
       }
     } catch (e: any) {
@@ -236,7 +238,7 @@ async function switchSystem(reason: string): Promise<boolean> {
     post({ type: "error", message: `boot refused: ${e.message}` });
     return false;
   }
-  const next = new WasixShell(dc, { kind: "system", base: shellOrigin, manifest }, status);
+  const next = new WasixShell(dc, { kind: "system", base: shellOrigin, manifest }, status, hostfs);
   try {
     await next.warmup();
   } catch (e: any) {
@@ -291,10 +293,10 @@ function systemPrompt() {
     "</rules>",
     "",
     "<environment>",
-    `Your working directory is ${CWD}. It is a comb: a versioned directory whose every tool call becomes one history entry. The past is readable at ${CWD}@<entry-id>/<path>.`,
+    `Your working directory is ${CWD}, which holds the combs: versioned directories whose every tool call becomes one history entry. Work in ${CWD}/${WORKSPACE} (relative paths start at ${CWD}, so write workspace/notes.md, not notes.md). A comb's past is readable at ${CWD}/<comb>@<entry-id>/<path>.`,
     `/nix is the comb holding the running system's flake: machine.json lists the packages the shell sandbox runs, pinned by sha256; editing it (any tool call that changes it) switches the system; flake.nix is its source but cannot be built here.`,
     `/machine is read-only and describes this node (read /machine for the index: session, system, shell, processes, runtime, agent, storage, egress, mounts, uptime).`,
-    `bash runs in a WASIX sandbox over the same root (/datacombs/<comb>, /nix, /machine; the @<entry> views are not mounted there). The Nix-built system has bash, coreutils, grep, sed, awk, find, xargs, diff; no git. It has no network; use the fetch tool for HTTP. Prefer the read tool over cat.`,
+    `bash runs in a WASIX sandbox with the same root mounted live (/datacombs/<comb>, /datacombs/<comb>@<entry>, /nix, /machine), cwd ${CWD}. The Nix-built system has bash, coreutils, grep, sed, awk, find, xargs, diff; no git. It has no network; use the fetch tool for HTTP. Prefer the read tool over cat.`,
     "</environment>",
     "",
     `<cwd>${CWD}</cwd>`,
@@ -363,10 +365,13 @@ const machineSources: MachineSources = {
   sdkVersion: () => "@wasmer/sdk 0.19.1",
 };
 
+/** gfs, mounted into every sandbox. */
+const hostfs = new GfsHostFs(dc, () => machineSnapshot(machineSources));
+(globalThis as any).__dbg = { get shell() { return shell; }, hostfs, dc, get runningSystem() { return runningSystem; } };
+
 function makeToolsFor() {
   return makeTools({
     machine: (path) => readMachine(machineSources, path),
-    machineAll: () => machineSnapshot(machineSources),
     dc,
     shell: currentShell,
     fetch: smartFetch,
@@ -454,7 +459,7 @@ async function rollback(comb: string, entryId: string) {
     try {
       manifest = parseManifest(new TextDecoder().decode(dc.readFileAt(entryId, "machine.json")));
       if (!runningSystem || JSON.stringify(runningSystem.manifest) !== JSON.stringify(manifest)) {
-        next = new WasixShell(dc, { kind: "system", base: shellOrigin, manifest }, status);
+        next = new WasixShell(dc, { kind: "system", base: shellOrigin, manifest }, status, hostfs);
         await next.warmup();
       }
     } catch (e: any) {
@@ -479,7 +484,7 @@ async function rollback(comb: string, entryId: string) {
 async function handle(req: Request): Promise<unknown> {
   switch (req.method) {
     case "init":
-      return init(req.shell);
+      return init(req.shell, req.trace);
     case "configure": {
       config = req.config;
       const m = currentModel();
@@ -524,7 +529,7 @@ async function handle(req: Request): Promise<unknown> {
       status(`$ ${req.command}`, true);
       let res;
       try {
-        res = await (await currentShell()).run(req.command, { cwd: CWD, timeoutMs: req.timeoutMs, machine: await machineSnapshot(machineSources), by: "shell" });
+        res = await (await currentShell()).run(req.command, { cwd: CWD, timeoutMs: req.timeoutMs, by: "shell" });
       } finally {
         status("shell ready", false);
       }
@@ -571,6 +576,21 @@ async function handle(req: Request): Promise<unknown> {
 }
 
 self.onmessage = async (e: MessageEvent<Request | BridgeInbound>) => {
+  if ((e.data as any).debugSet) {
+    (globalThis as any)[(e.data as any).debugSet] = true;
+    return;
+  }
+  if ((e.data as any).debugEval) {
+    // PROTOTYPE ONLY: evaluate in the worker for the test driver.
+    let out: unknown;
+    try {
+      out = await (0, eval)(`(async () => { ${(e.data as any).debugEval} })()`);
+    } catch (err: any) {
+      out = `error: ${err?.message ?? err}`;
+    }
+    self.postMessage({ debugEvalResult: (e.data as any).tag, out: typeof out === "string" ? out : JSON.stringify(out) });
+    return;
+  }
   if ((e.data as BridgeInbound).bridge) {
     const b = e.data as BridgeInbound;
     onBridgeEvent(b.id, b.event);

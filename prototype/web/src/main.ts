@@ -593,7 +593,7 @@ setTimeout(() => {
 }, 15000);
 (async () => {
   try {
-    info = await worker.call<InitInfo>({ method: "init", shell: new URLSearchParams(location.search).get("shell") ?? undefined });
+    info = await worker.call<InitInfo>({ method: "init", shell: new URLSearchParams(location.search).get("shell") ?? undefined, trace: new URLSearchParams(location.search).get("trace") === "1" });
     statusText = "ready; starting the system…";
     config = { ...info.config, ...config };
     await worker.call({ method: "configure", config });

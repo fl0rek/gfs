@@ -53,7 +53,7 @@ export interface ModelConfig {
 
 // Page → worker requests (RPC; every request gets a reply with the same id).
 export type Request =
-  | { id: number; method: "init"; shell?: string }
+  | { id: number; method: "init"; shell?: string; trace?: boolean }
   | { id: number; method: "configure"; config: ModelConfig }
   | { id: number; method: "prompt"; text: string }
   | { id: number; method: "abort" }

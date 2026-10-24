@@ -120,7 +120,7 @@ check(log4.length > log3.length, `more entries after second prompt: ${log4.lengt
 
 // 5. "!" passthrough: a direct shell command, recorded as an external entry
 if (shellArg !== "none") {
-  await page.type("textarea", "!echo manual > by-hand.txt && ls");
+  await page.type("textarea", "!echo manual > workspace/by-hand.txt && ls workspace");
   await page.keyboard.press("Enter");
   await until(async () => (await state()).busy, "shell start", 10000);
   await until(async () => !(await state()).busy, "shell end");

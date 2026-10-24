@@ -6,7 +6,7 @@ type Listener = (n: Notification) => void;
 type DistributiveOmit<T, K extends keyof any> = T extends any ? Omit<T, K> : never;
 
 export class AgentWorker {
-  private worker: Worker;
+  worker: Worker;
   private next = 1;
   private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
   private listeners = new Set<Listener>();

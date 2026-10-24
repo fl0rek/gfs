@@ -1,25 +1,27 @@
-// PROTOTYPE. A real WASIX bash (Wasmer JS SDK) that sees the gfs root.
+// PROTOTYPE. A real WASIX bash (Wasmer JS SDK) with gfs mounted into it.
 //
-// The SDK's sandbox has its own in-memory filesystem; we don't yet mount gfs
-// into it directly (the SDK's host-filesystem bridge is experimental). Instead,
-// every command sees the root the harness sees:
-//   /datacombs/<comb>   every comb's working tree (read-write)
-//   /nix                the nix comb (read-write; a change there is a switch)
-// Two SDK facts shape how: the host may only touch `/workspace`, and changes
-// to `/` do not survive from one guest process to the next. So the host keeps
-// an incremental mirror under /workspace/.gfs, and each command runs inside a
-// wrapper bash that copies it to /, runs the command in a child bash at
-// /datacombs/workspace, and copies the combs back to /workspace/.gfs/out,
-// which the host diffs against gfs. Whatever changed lands in gfs and becomes
-// one history entry like any other tool call.
+// The sandbox is built through the SDK's core with host mounts (see hostfs.ts):
+//   /datacombs   every comb's working tree, plus <comb>@<entry> read-only views
+//   /nix         the nix comb (read-write; a change there is a switch)
+//   /machine     the node describing itself (read-only, generated on read)
+// Every filesystem call under those paths is answered from gfs in this worker,
+// so there is no copy in or out: what a command writes is in the comb the
+// moment it is written, and becomes one history entry like any other tool call.
 
-import type { Wasmer, Sandbox, Package } from "@wasmer/sdk/browser";
+import type { Wasmer, Sandbox } from "@wasmer/sdk/browser";
+import { GfsHostFs, installHostFs, MOUNT_DATACOMBS, MOUNT_NIX, MOUNT_MACHINE } from "./hostfs";
 
 /** Load the SDK unbundled (see vite.config.ts). */
 async function loadSdk(): Promise<typeof import("@wasmer/sdk/browser")> {
   const url = import.meta.env.DEV
     ? "/node_modules/@wasmer/sdk/dist/index.js"
     : new URL(`${import.meta.env.BASE_URL}wasmer-sdk/dist/index.js`, self.location.href).href;
+  return import(/* @vite-ignore */ url);
+}
+async function loadHostFsBridge(): Promise<{ respondToHostFileSystem: (req: any, res: any) => void; isHostFileSystemRequest: (m: unknown) => boolean }> {
+  const url = import.meta.env.DEV
+    ? "/node_modules/@wasmer/sdk/dist/host-filesystem.js"
+    : new URL(`${import.meta.env.BASE_URL}wasmer-sdk/dist/host-filesystem.js`, self.location.href).href;
   return import(/* @vite-ignore */ url);
 }
 import type { Datacombs } from "./gfs";
@@ -31,8 +33,6 @@ export interface RunOptions {
   onData?: (chunk: string) => void;
   cwd: string;
   env?: Record<string, string>;
-  /** /machine contents to expose in the sandbox, path → text. */
-  machine?: Record<string, string>;
   /** Who runs this ("tool:<id>", "shell"), for the process log. */
   by?: string;
 }
@@ -60,8 +60,11 @@ export interface Shell {
 export const processLog: import("./machine").ProcessRecord[] = [];
 let nextPid = 1;
 
-/** The runtime's own heap: the SDK's WebAssembly.Memory, via the cached glue module. */
+let sdkStarted = false;
+
+/** The runtime's own heap: the SDK's WebAssembly.Memory, via the cached glue module. Only once the SDK is up: init() on a cold module would instantiate a second runtime. */
 export async function runtimeHeapBytes(): Promise<number | null> {
+  if (!sdkStarted) return null;
   try {
     const url = import.meta.env.DEV
       ? "/node_modules/@wasmer/sdk/pkg/wasmer_sdk_js.js"
@@ -146,19 +149,16 @@ const dec = new TextDecoder();
 export class WasixShell implements Shell {
   private wasmer: Wasmer | null = null;
   private sandbox: Sandbox | null = null;
-  private pkg: Package | null = null;
-  private extraPkgs: Package[] = [];
   private commandName = "bash";
   private ready: Promise<void> | null = null;
   bootedAt: number | null = null;
-  private machineFiles = new Set<string>();
-  /** What the sandbox currently holds per comb: path → blob hash. */
-  private mirrored = new Map<string, Map<string, string>>();
+  private pkgCores: any[] = [];
 
   constructor(
     private dc: Datacombs,
     private source: ShellSource,
     private status: (text: string, busy?: boolean) => void,
+    private hostfs: GfsHostFs,
   ) {}
 
   warmup(): Promise<void> {
@@ -177,31 +177,30 @@ export class WasixShell implements Shell {
 
   commands(): string[] {
     const all = new Set<string>();
-    for (const p of [this.pkg, ...this.extraPkgs]) for (const c of p?.commands ?? []) all.add(c);
+    for (const p of this.pkgCores) for (const c of p.commands as string[]) all.add(c);
     return [...all].sort();
   }
 
   packages() {
-    return [this.pkg, ...this.extraPkgs].filter((p): p is Package => !!p).map((p) => ({ id: p.id, commands: p.commands.length }));
+    return this.pkgCores.map((p) => ({ id: p.id as string, commands: (p.commands as string[]).length }));
   }
 
   private async boot() {
     this.status("starting WASIX runtime…", true);
-    const { Wasmer } = await loadSdk();
+    const { Wasmer, Sandbox } = await loadSdk();
+    const bridge = await loadHostFsBridge();
+    installHostFs(this.hostfs, bridge.respondToHostFileSystem, bridge.isHostFileSystemRequest, (m) => console.log(m));
     this.wasmer = new Wasmer({ parallelism: 2 });
     await this.wasmer.ready();
+    sdkStarted = true;
+    const client: any = await (this.wasmer as any).getCore();
     if (this.source.kind === "registry") {
       this.status(`fetching ${this.source.name} from the Wasmer registry…`, true);
-      this.pkg = await this.wasmer.packages.load(this.source.name, {
-        onProgress: (p) => {
-          const pct = p.download.percent == null ? "" : ` ${Math.round(p.download.percent)}%`;
-          this.status(`${p.phase} ${this.source.kind === "registry" ? this.source.name : ""}${pct}`, p.phase !== "ready");
-        },
-      });
-      this.commandName = this.pkg.entrypoint ?? "bash";
+      const core = await client.loadPackage(this.source.name);
+      this.pkgCores.push(core);
+      this.commandName = core.entrypoint ?? "bash";
     } else if (this.source.kind === "system") {
       const { base, manifest } = this.source;
-      const pkgs: Package[] = [];
       const modules: Record<string, Uint8Array> = {};
       const commands: Record<string, { module: string }> = {};
       for (const p of manifest.packages) {
@@ -213,32 +212,38 @@ export class WasixShell implements Shell {
         if (got !== p.sha256) throw new Error(`${p.name}: sha256 mismatch (manifest ${p.sha256.slice(0, 12)}…, got ${got.slice(0, 12)}…); refusing to run it`);
         if (p.kind === "webc") {
           this.status(`loading ${p.name}…`, true);
-          pkgs.push(await this.wasmer.packages.load(bytes));
+          this.pkgCores.push(await client.loadPackageBytes(bytes));
         } else {
           const mod = p.url.split("/").pop()!.replace(/[^A-Za-z0-9._+-]/g, "_");
           modules[mod] = bytes;
           for (const c of p.commands) commands[c] = { module: mod };
         }
       }
-      if (Object.keys(modules).length) pkgs.push(await this.wasmer.packages.create({ modules, commands }));
-      const shellPkg = pkgs.find((p) => p.commands.includes(manifest.shell));
-      if (!shellPkg) throw new Error(`no package in the system provides the shell "${manifest.shell}"`);
-      this.pkg = shellPkg;
-      this.extraPkgs = pkgs.filter((p) => p !== shellPkg);
+      if (Object.keys(modules).length) this.pkgCores.push(await client.createPackage({ modules, commands }));
+      if (!this.pkgCores.some((p) => p.hasCommand(manifest.shell))) throw new Error(`no package in the system provides the shell "${manifest.shell}"`);
       this.commandName = manifest.shell;
-      console.log("system packages:", pkgs.map((p) => `${p.id} [${p.commands.length} cmds]`).join(", "));
+      console.log("system packages:", this.pkgCores.map((p) => `${p.id} [${p.commands.length} cmds]`).join(", "));
     } else {
-      this.pkg = await this.wasmer.packages.create({
-        modules: { app: this.source.bytes },
-        commands: { [this.source.command]: { module: "app" } },
-      });
+      const def = { modules: { app: this.source.bytes }, commands: { [this.source.command]: { module: "app" } } };
+      this.pkgCores.push(await client.createPackage(def));
       this.commandName = this.source.command;
     }
-    this.status("creating sandbox…", true);
-    // Dependencies first, so the shell's `use` edges resolve against what is already installed.
-    this.sandbox = await this.wasmer.sandboxes.create({ packages: [...this.extraPkgs, this.pkg] });
-    for (const d of [`${STAGE}/datacombs`, `${STAGE}/nix`, `${STAGE}/machine`]) await this.sandbox.fs.mkdir(d, { recursive: true }).catch(() => {});
-    this.mirrored.clear();
+    this.status("mounting gfs into the sandbox…", true);
+    // The public sandboxes.create() has no mount option; build through the core.
+    const step = (m: string) => console.log(`shell boot: ${m}`);
+    const builder = client.sandbox();
+    step(`builder created; ${this.pkgCores.length} package(s)`);
+    for (const core of this.pkgCores) builder.package(core);
+    step("packages added");
+    builder.mountHost(DATACOMBS, MOUNT_DATACOMBS, false);
+    builder.mountHost("/nix", MOUNT_NIX, false);
+    builder.mountHost("/machine", MOUNT_MACHINE, true);
+    step("mounts added");
+    builder.network("disabled");
+    const sandboxCore = await builder.start();
+    step("sandbox started");
+    this.sandbox = new Sandbox(this.wasmer, sandboxCore);
+    this.hostfs.refreshMachine();
     this.bootedAt = Date.now();
     this.status("shell ready", false);
   }
@@ -246,19 +251,12 @@ export class WasixShell implements Shell {
   async run(command: string, opts: RunOptions): Promise<RunResult> {
     await this.warmup();
     const sandbox = this.sandbox!;
-    await this.syncIn(opts.machine ?? {});
+    this.hostfs.takeTouched();
     const rec: import("./machine").ProcessRecord = { id: nextPid++, command, started: Date.now(), ms: null, exit: null, changed: [], by: opts.by ?? "shell" };
     processLog.push(rec);
     if (processLog.length > 200) processLog.shift();
-    const env = {
-      HOME: opts.cwd,
-      PWD: opts.cwd,
-      TERM: "dumb",
-      GFS_CMD: command,
-      GFS_CWD: opts.cwd,
-      ...(opts.env ?? {}),
-    };
-    const cmd = sandbox.command(this.pkg!.command(this.commandName), ["-c", WRAPPER], { cwd: "/", env });
+    const env = { HOME: opts.cwd, TERM: "dumb", ...(opts.env ?? {}) };
+    const cmd = sandbox.command(this.commandName, ["-c", command], { cwd: opts.cwd, env });
     const proc = await cmd.spawn({ stdin: "closed", stdout: "pipe", stderr: "pipe", timeoutMs: opts.timeoutMs });
     const chunks: string[] = [];
     const pump = async (stream: AsyncIterable<Uint8Array> | null) => {
@@ -276,7 +274,7 @@ export class WasixShell implements Shell {
       const out = await proc.wait({ check: false });
       if (opts.signal?.aborted) throw new Error("Command aborted");
       if (out.reason === "timeout") throw new Error(`Command timed out after ${(opts.timeoutMs ?? 0) / 1000} seconds`);
-      const changed = await this.syncOut();
+      const changed = this.hostfs.takeTouched();
       rec.ms = Date.now() - rec.started;
       rec.exit = out.exitCode;
       rec.changed = changed;
@@ -289,115 +287,6 @@ export class WasixShell implements Shell {
       opts.signal?.removeEventListener("abort", onAbort);
     }
   }
-
-  /** Bring every comb (and a /machine snapshot) up to date in the sandbox's staging mirror. */
-  private async syncIn(machine: Record<string, string>) {
-    const fs = this.sandbox!.fs;
-    const combs = this.dc.listCombs();
-    // combs that vanished (not expected, but keep the mirror honest)
-    for (const comb of [...this.mirrored.keys()]) {
-      if (!combs.includes(comb)) {
-        await fs.remove(stageDir(comb), { recursive: true }).catch(() => {});
-        this.mirrored.delete(comb);
-      }
-    }
-    for (const comb of combs) {
-      const root = stageDir(comb);
-      const have = this.mirrored.get(comb) ?? new Map<string, string>();
-      if (!this.mirrored.has(comb)) await fs.mkdir(root, { recursive: true }).catch(() => {});
-      const want = new Map<string, string>();
-      for (const [path, hash] of this.dc.listAll(comb)) want.set(path, hash);
-      for (const [path] of have) if (!want.has(path)) await fs.remove(`${root}/${path}`).catch(() => {});
-      for (const [path, hash] of want) {
-        if (have.get(path) === hash) continue;
-        const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
-        if (dir) await fs.mkdir(`${root}/${dir}`, { recursive: true }).catch(() => {});
-        await fs.writeFile(`${root}/${path}`, this.dc.readFile(comb, path));
-      }
-      this.mirrored.set(comb, want);
-    }
-    // /machine: rewritten every time; small
-    for (const name of this.machineFiles) if (!(name in machine)) await fs.remove(`${STAGE}/machine/${name}`).catch(() => {});
-    for (const [name, text] of Object.entries(machine)) await fs.writeText(`${STAGE}/machine/${name}`, text);
-    this.machineFiles = new Set(Object.keys(machine));
-  }
-
-  /** Write back what the command changed under any comb. Returns the combs that changed. */
-  private async syncOut(): Promise<string[]> {
-    const fs = this.sandbox!.fs;
-    const changed: string[] = [];
-    for (const comb of this.dc.listCombs()) {
-      const root = outDir(comb);
-      const seen = new Set<string>();
-      let dirty = false;
-      const walk = async (dir: string) => {
-        let entries: readonly { name: string; kind: string }[] = [];
-        try {
-          entries = await fs.readDir(dir);
-        } catch {
-          return;
-        }
-        for (const e of entries) {
-          const full = dir === root ? e.name : `${dir.slice(root.length + 1)}/${e.name}`;
-          if (e.kind === "directory") {
-            await walk(`${root}/${full}`);
-            continue;
-          }
-          seen.add(full);
-          const bytes = await fs.readFile(`${root}/${full}`);
-          let same = false;
-          try {
-            same = this.dc.exists(comb, full) && bytesEqual(this.dc.readFile(comb, full), bytes);
-          } catch {}
-          if (!same) {
-            this.dc.writeFile(comb, full, bytes);
-            dirty = true;
-          }
-        }
-      };
-      await walk(root);
-      for (const [path] of this.dc.listAll(comb)) {
-        if (!seen.has(path)) {
-          this.dc.remove(comb, path);
-          dirty = true;
-        }
-      }
-      if (dirty) changed.push(comb);
-      // The staging copy is now stale for whatever changed; the next syncIn rewrites those files.
-    }
-    return changed;
-  }
-}
-
-/** Where a comb appears in the shell's root. */
-export function combDir(comb: string): string {
-  return comb === NIX_COMB ? "/nix" : `${DATACOMBS}/${comb}`;
-}
-
-/** The host's side of the mirror (the only place it may write). */
-const STAGE = "/workspace/.gfs";
-const stageDir = (comb: string) => `${STAGE}${combDir(comb)}`;
-const outDir = (comb: string) => `${STAGE}/out${combDir(comb)}`;
-
-/** Runs as the sandbox's bash: materialise the root, run the user's command, hand the combs back. */
-// (`cp -a src/. dst/` breaks on empty directories under WASIX; the plain form works.)
-const WRAPPER = [
-  `cp -a ${STAGE}/datacombs /datacombs || echo "gfs: could not materialise /datacombs" >&2`,
-  `cp -a ${STAGE}/nix /nix || echo "gfs: could not materialise /nix" >&2`,
-  `cp -a ${STAGE}/machine /machine 2>/dev/null`,
-  'cd "$GFS_CWD" 2>/dev/null || cd /datacombs/workspace',
-  'bash -c "$GFS_CMD"',
-  "rc=$?",
-  `rm -rf ${STAGE}/out; mkdir -p ${STAGE}/out`,
-  `cp -a /datacombs ${STAGE}/out/datacombs || echo "gfs: could not read back /datacombs" >&2`,
-  `cp -a /nix ${STAGE}/out/nix || echo "gfs: could not read back /nix" >&2`,
-  "exit $rc",
-].join("\n");
-
-function bytesEqual(a: Uint8Array, b: Uint8Array) {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-  return true;
 }
 
 /** Used until the WASIX shell is wanted, or when it cannot start. */

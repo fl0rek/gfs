@@ -22,8 +22,6 @@ export interface ToolContext {
   turnId: () => string;
   /** /machine reader */
   machine: (path: string) => Promise<string>;
-  /** a snapshot of every /machine file, for the shell */
-  machineAll: () => Promise<Record<string, string>>;
   /** Commit a comb's working tree (the worker decides what that entails; /nix is atomic with the switch). */
   commit: (comb: string, kind: EntryKind, author: Author) => Promise<string | null>;
 }
@@ -263,7 +261,6 @@ export function makeTools(ctx: ToolContext): AgentTool<any, any>[] {
       const t0 = performance.now();
       const sh = await ctx.shell();
       const res = await sh.run(command, {
-        machine: await ctx.machineAll(),
         by: `tool:${_id}`,
         timeoutMs: timeout ? timeout * 1000 : undefined,
         signal,
