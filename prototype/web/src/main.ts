@@ -401,8 +401,8 @@ function summarizeArgs(name: string, a: any): string {
 }
 
 function renderConfig() {
-  const providers: ModelConfig["provider"][] = ["mock", "deepseek", "opencode", "openai-compatible"];
-  const defaults: Record<string, string> = { mock: "scripted-agent", deepseek: "deepseek-v4-pro", opencode: "claude-sonnet-4-6", "openai-compatible": "" };
+  const providers: ModelConfig["provider"][] = ["mock", "free", "deepseek", "opencode", "openai-compatible"];
+  const defaults: Record<string, string> = { mock: "scripted-agent", free: "free", deepseek: "deepseek-v4-pro", opencode: "claude-sonnet-4-6", "openai-compatible": "" };
   return h("details", { class: "config", open: config.provider !== "mock" && !config.apiKey },
     h("summary", {}, "model: ", h("b", {}, `${config.provider} / ${config.model}`), config.provider !== "mock" && !config.apiKey ? h("span", { class: "warn" }, " · no API key") : null),
     h("div", { class: "grid" },
@@ -412,7 +412,7 @@ function renderConfig() {
       ),
       h("label", {}, "model", h("input", { value: config.model, onInput: (e: any) => (config.model = e.target.value) })),
       config.provider === "openai-compatible" ? h("label", {}, "base URL", h("input", { value: config.baseUrl ?? "", placeholder: "https://host/v1", onInput: (e: any) => (config.baseUrl = e.target.value) })) : null,
-      config.provider !== "mock" ? h("label", {}, "API key (kept in sessionStorage only)", h("input", { type: "password", value: config.apiKey, onInput: (e: any) => (config.apiKey = e.target.value) })) : null,
+      config.provider === "free" ? renderFreeKeys() : config.provider !== "mock" ? h("label", {}, "API key (kept in sessionStorage only)", h("input", { type: "password", value: config.apiKey, onInput: (e: any) => (config.apiKey = e.target.value) })) : null,
       h("div", { class: "row" },
         h("button", { onClick: applyConfig }, "Apply"),
         h("button", { onClick: () => worker.call({ method: "shellWarmup" }).catch((e) => { error = e.message; render(); }) }, "Start bash now"),
@@ -420,6 +420,33 @@ function renderConfig() {
       ),
       h("p", { class: "muted small" }, "The key goes straight from this tab to the provider; CORS is the provider's call. Requests are made from the worker."),
     ),
+  );
+}
+
+// ----- free-tier router -----
+const FREE_PROVIDERS = [
+  ["openrouter", "OpenRouter", "https://openrouter.ai/keys"],
+  ["google", "Google Gemini", "https://aistudio.google.com/apikey"],
+  ["groq", "Groq", "https://console.groq.com/keys"],
+  ["cerebras", "Cerebras", "https://cloud.cerebras.ai"],
+  ["mistral", "Mistral", "https://console.mistral.ai/api-keys"],
+] as const;
+let freeStatus: { updated: string; routed: string | null; models: { key: string; state: string; ping?: string; until?: number }[] } | null = null;
+async function refreshFreeStatus() {
+  freeStatus = await worker.call({ method: "freeStatus" });
+  render();
+}
+function renderFreeKeys(): Node {
+  config.freeKeys ??= {};
+  return h("div", { class: "free" },
+    h("p", { class: "muted small" }, "Rides whichever free tier is up, from ", h("a", { href: "https://github.com/anus-dev/ANUS", target: "_blank" }, "ANUS"), "'s ranked list. Keys are still needed; they stay in sessionStorage."),
+    FREE_PROVIDERS.map(([id, name, url]) =>
+      h("label", {}, h("span", {}, name, " ", h("a", { href: url, target: "_blank", class: "muted" }, "(get a key)")),
+        h("input", { type: "password", value: config.freeKeys![id] ?? "", placeholder: "no key", onInput: (e: any) => (config.freeKeys![id] = e.target.value) }))),
+    h("div", { class: "row" }, h("button", { onClick: refreshFreeStatus }, "Show models")),
+    freeStatus ? h("ul", { class: "free-list" },
+      h("li", { class: "muted" }, `list updated ${freeStatus.updated || "?"}${freeStatus.routed ? ` · last answer from ${freeStatus.routed}` : ""}`),
+      freeStatus.models.map((m) => h("li", { class: m.state }, h("span", { class: "mono" }, m.key), ` · ${m.state}${m.until ? ` until ${new Date(m.until).toLocaleTimeString()}` : ""}${m.ping && m.ping !== "ok" ? ` · ping ${m.ping}` : ""}`))) : null,
   );
 }
 
@@ -439,6 +466,7 @@ function timelineItems(): Item[] {
     }
   }
   if (selectedComb === WORKSPACE) for (const sh of shellLog) items.push({ time: sh.time, kind: "shell", text: `$ ${sh.command}` });
+  if (selectedComb !== "nix") for (const e of logs.nix ?? []) if (e.kind === "switch") items.push({ time: e.time, kind: "entry", entry: e });
   items.sort((a, b) => a.time - b.time || (a.kind === "entry" ? 1 : -1));
   return items;
 }
@@ -471,7 +499,7 @@ function renderItem(it: Item): Node {
   const n = e.summary.added.length + e.summary.modified.length + e.summary.removed.length;
   return h("div", { class: `item entry ${e.kind}${selectedEntry === e.id ? " selected" : ""}`, onClick: () => selectEntry(selectedEntry === e.id ? null : e.id) },
     h("span", { class: "time" }, fmtTime(e.time)),
-    h("span", { class: `tag ${e.kind}` }, e.kind === "tool_call" ? e.tool_name : e.kind),
+    h("span", { class: `tag ${e.kind}` }, e.kind === "tool_call" ? e.tool_name : e.kind === "switch" ? "system" : e.kind),
     h("span", { class: "text" }, e.message),
     h("span", { class: "meta mono" },
       n ? `${e.summary.added.length ? "+" + e.summary.added.length + " " : ""}${e.summary.modified.length ? "~" + e.summary.modified.length + " " : ""}${e.summary.removed.length ? "−" + e.summary.removed.length + " " : ""}` : "",
@@ -486,7 +514,7 @@ function renderDetail(): Node {
     ["entry", h("span", { class: "mono" }, e.id)],
     ["parent", e.parent ? h("a", { href: "#", onClick: (ev: Event) => { ev.preventDefault(); selectEntry(e.parent!); } }, short(e.parent)) : "none (genesis)"],
     ["tree", h("span", { class: "mono" }, short(e.tree))],
-    ["kind", e.kind + (e.tool_name ? ` · ${e.tool_name}` : "") + (e.to_entry ? ` → ${short(e.to_entry)}` : "")],
+    ["kind", e.kind + (e.tool_name ? ` · ${e.tool_name}` : "") + (e.to_entry ? ` → ${short(e.to_entry)}` : "") + (e.kind === "switch" ? ` · now running /nix@${short(e.at_entry)}${e.previous ? `, was @${short(e.previous)}` : ""}` : "")],
     ["when", new Date(e.time).toLocaleString()],
     ["author", `${e.author.harness || "?"} session ${e.author.session}${e.author.model ? ` · model ${e.author.model}` : ""} · for ${e.author.principal}`],
     ["committer", `node ${e.committer}`],

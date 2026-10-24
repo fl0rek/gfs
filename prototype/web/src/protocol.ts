@@ -19,7 +19,10 @@ export interface HistoryEntry {
   comb: string;
   parent: string | null;
   tree: string;
-  kind: "genesis" | "tool_call" | "turn" | "external" | "rollback";
+  kind: "genesis" | "tool_call" | "turn" | "external" | "rollback" | "switch";
+  at_entry?: string;
+  previous?: string | null;
+  system?: string;
   tool_call_id?: string;
   turn_id?: string;
   tool_name?: string;
@@ -40,10 +43,12 @@ export interface VerifyReport {
 }
 
 export interface ModelConfig {
-  provider: "mock" | "deepseek" | "opencode" | "openai-compatible";
+  provider: "mock" | "free" | "deepseek" | "opencode" | "openai-compatible";
   model: string;
   apiKey: string;
   baseUrl?: string;
+  /** Keys for the free-tier router, per provider (openrouter, google, groq, cerebras, mistral). */
+  freeKeys?: Record<string, string>;
 }
 
 // Page → worker requests (RPC; every request gets a reply with the same id).
@@ -69,7 +74,8 @@ export type Request =
   | { id: number; method: "bridgeAvailable"; available: boolean }
   | { id: number; method: "debugFetch"; url: string }
   | { id: number; method: "debugTool"; name: string; params: unknown }
-  | { id: number; method: "saveFile"; comb: string; path: string; content: string }; // you, editing outside pi → external entry
+  | { id: number; method: "saveFile"; comb: string; path: string; content: string } // you, editing outside pi → external entry
+  | { id: number; method: "freeStatus" }; // the free-tier router's view of its models
 
 /** Page → worker, outside the RPC: a response event from the egress bridge. */
 export interface BridgeInbound {

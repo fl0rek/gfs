@@ -16,7 +16,8 @@ const dec = new TextDecoder();
 export type EntryKind =
   | { kind: "tool_call"; tool_call_id: string; turn_id: string; tool_name: string; args_hash: string | null }
   | { kind: "turn"; turn_id: string }
-  | { kind: "external" };
+  | { kind: "external" }
+  | { kind: "switch"; at_entry: string; previous: string | null; system: string };
 
 export class Datacombs {
   private gfs!: Gfs;

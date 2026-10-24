@@ -27,7 +27,7 @@ await page.waitForFunction((b) => window.__pi.state().info.system.entry !== b, {
 const st = await page.evaluate(() => window.__pi.state());
 check(st.info.system.name === "renamed from bash", `…switched the system: ${st.info.system.name}`);
 const nixLog = await call({ method: "log", comb: "nix" });
-check(nixLog[0].tool_name === "bash", "…as a bash tool-call entry on /nix");
+check(nixLog[0].kind === "switch" && nixLog[1].tool_name === "bash", "…as a bash tool-call entry on /nix, then the switch");
 await browser.close();
 console.log(failures ? `${failures} FAILED` : "all checks passed");
 process.exit(failures ? 1 : 0);

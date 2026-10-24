@@ -59,6 +59,18 @@ for (const name of Object.keys(PACKAGES)) {
 }
 writeFileSync(new URL("index.json", out), JSON.stringify({ packages: PACKAGES, registry }, null, 1));
 
+// ---- the free-tier model list (snapshot; the worker fetches the live one when it can) ----
+try {
+  const res = await fetch("https://anus.dev/free-models.json");
+  const list = await res.json();
+  if (Array.isArray(list.models)) {
+    writeFileSync(new URL("../public/free-models.json", import.meta.url), JSON.stringify(list, null, 1));
+    console.log(`free-models.json: ${list.models.length} models, updated ${list.updated}`);
+  }
+} catch (e) {
+  console.log("free-models.json: could not fetch (keeping the previous snapshot)", e.message);
+}
+
 // ---- the deployed system (/nix/machine.json seed) ----
 // If the machine flake was built (prototype/machine/result, or $MACHINE_OUT), its wasm modules are
 // copied into public/machine/ and become the system; the registry .webc packages fill in whatever the

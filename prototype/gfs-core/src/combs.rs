@@ -376,7 +376,7 @@ impl Datacombs {
         let parent = self.entry(&head)?;
         let flat = self.wt(comb)?.clone();
         let tree = self.write_tree(&flat);
-        if tree == parent.tree && !matches!(kind, EntryKind::Rollback { .. }) {
+        if tree == parent.tree && !matches!(kind, EntryKind::Rollback { .. } | EntryKind::Switch { .. }) {
             return Ok(None);
         }
         let base = self.flatten_tree_hashes(&parent.tree, "")?;
@@ -630,6 +630,7 @@ fn generate_message(kind: &EntryKind, s: &ChangeSummary) -> String {
         EntryKind::Turn { .. } => format!("turn: {what}"),
         EntryKind::External => format!("external: {what}"),
         EntryKind::Rollback { to_entry } => format!("rollback to {}: {what}", &to_entry[..8.min(to_entry.len())]),
+        EntryKind::Switch { at_entry, system, .. } => format!("switch to @{}: {system}", &at_entry[..8.min(at_entry.len())]),
     }
 }
 

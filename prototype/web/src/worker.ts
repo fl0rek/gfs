@@ -8,6 +8,12 @@ import { Agent, type AgentEvent, type AgentMessage } from "@earendil-works/pi-ag
 import { createModels, createProvider, type Model, type MutableModels } from "@earendil-works/pi-ai";
 import { deepseekProvider } from "@earendil-works/pi-ai/providers/deepseek";
 import { opencodeProvider } from "@earendil-works/pi-ai/providers/opencode";
+import { openrouterProvider } from "@earendil-works/pi-ai/providers/openrouter";
+import { googleProvider } from "@earendil-works/pi-ai/providers/google";
+import { groqProvider } from "@earendil-works/pi-ai/providers/groq";
+import { cerebrasProvider } from "@earendil-works/pi-ai/providers/cerebras";
+import { mistralProvider } from "@earendil-works/pi-ai/providers/mistral";
+import { FreeRouter, loadFreeList } from "./free";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { Datacombs } from "./gfs";
 import { makeTools } from "./tools";
@@ -70,6 +76,7 @@ async function bootSystemOnce() {
   }
 }
 const mock = createMockProvider();
+let free: FreeRouter;
 
 const post = (n: Notification) => self.postMessage(n);
 installBridge({ send: (id, req) => post({ type: "bridge", reqId: id, req }) });
@@ -93,6 +100,13 @@ async function init(shellParam?: string): Promise<InitInfo> {
   models.setProvider(mock.provider);
   models.setProvider(deepseekProvider());
   models.setProvider(opencodeProvider());
+  for (const p of [openrouterProvider(), googleProvider(), groqProvider(), cerebrasProvider(), mistralProvider()]) models.setProvider(p);
+  free = new FreeRouter(models, () => config.freeKeys ?? {}, (m) => console.log(m));
+  models.setProvider(free.provider());
+  void loadFreeList(smartFetch, new URL("free-models.json", shellOrigin)).then((l) => {
+    free.list = l;
+    console.log(`free: ${l.models.length} models, list updated ${l.updated}`);
+  });
 
   // Shell: real WASIX bash from the registry; the page may override the source for tests.
   if (shellParam === "none") shell = new UnavailableShell("disabled with ?shell=none");
@@ -157,6 +171,8 @@ async function switchSystem(reason: string): Promise<boolean> {
   }
   if (runningSystem && JSON.stringify(runningSystem.manifest) === JSON.stringify(manifest)) {
     // Same built system at a newer entry (flake.nix edited, or a rollback to an identical manifest): nothing to rebuild.
+    const e = dc.entry(head);
+    if (e.kind === "switch") return false; // our own record of the last switch
     runningSystem.entry = head;
     post({ type: "system", entry: head, name: manifest.name ?? "", reason: `${reason}; same packages, no rebuild` });
     return false;
@@ -176,11 +192,20 @@ async function switchSystem(reason: string): Promise<boolean> {
   }
   const old = shell;
   shell = next;
+  const previous = runningSystem?.entry ?? null;
   runningSystem = { manifest, entry: head, switchedAt: Date.now() };
   await old.close();
   if (agent) agent.state.tools = makeToolsFor();
+  // The switch is an event of its own in /nix's history: same tree, different kind.
+  const switchId = await dc.commit(
+    NIX_COMB,
+    { kind: "switch", at_entry: head, previous, system: manifest.name ?? "" },
+    { session: sessionId, harness: "node", model: "", principal: "user" },
+  );
+  post({ type: "history", comb: NIX_COMB, objectCount: dc.objectCount() });
   status(`system: /nix@${head.slice(0, 8)} (${reason})`, false);
   post({ type: "system", entry: head, name: manifest.name ?? "", reason });
+  void switchId;
   return true;
 }
 
@@ -229,6 +254,7 @@ function systemPrompt() {
 
 function currentModel(): Model<any> {
   if (config.provider === "mock") return mock.getModel();
+  if (config.provider === "free") return models.getModel("free", "free")!;
   if (config.provider === "openai-compatible") {
     const id = "custom";
     const m: Model<"openai-completions"> = {
@@ -420,6 +446,8 @@ async function handle(req: Request): Promise<unknown> {
     case "wipe":
       await dc.wipe();
       return null;
+    case "freeStatus":
+      return free.status();
     case "saveFile": {
       // An edit made by you in the page's editor: outside any tool call, so an "external" entry.
       if (agent?.state.isStreaming) throw new Error("wait for the agent to finish");

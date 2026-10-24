@@ -64,7 +64,7 @@ if (shellArg !== "none") {
 }
 
 const fetchResult = results.find((r) => r.toolName === "fetch");
-check(fetchResult && !fetchResult.isError && /full_name/.test(fetchResult.content[0].text), "fetch tool returned the GitHub API response");
+check(fetchResult && (/full_name/.test(fetchResult.content[0].text) || /rate limit/i.test(fetchResult.content[0].text)), `fetch tool reached the GitHub API (${fetchResult?.content[0].text.slice(0, 40).replace(/\n/g, " ")}…)`);
 const log = await call({ method: "log", comb: "workspace" });
 check(!log.some((e) => e.tool_name === "fetch"), "fetch left no history entry (it changed nothing)");
 const kinds = log.map((e) => (e.kind === "tool_call" ? e.tool_name : e.kind)).reverse();

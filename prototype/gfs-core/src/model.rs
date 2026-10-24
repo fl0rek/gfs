@@ -124,6 +124,9 @@ pub enum EntryKind {
     External,
     /// A rollback: the tree is a copy of an earlier entry's tree.
     Rollback { to_entry: Hash },
+    /// The node switched the running system to this comb's state at `at_entry`
+    /// (the tree is unchanged; this records the event itself).
+    Switch { at_entry: Hash, previous: Option<Hash>, system: String },
 }
 
 /// One link in a comb's history chain. Its id is the hash of its canonical JSON.
