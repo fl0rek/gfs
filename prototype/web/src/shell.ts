@@ -85,7 +85,7 @@ export interface SystemManifest {
 }
 export type SystemPackage =
   | { kind: "webc"; name: string; url: string; sha256: string }
-  | { kind: "wasm"; name: string; url: string; sha256: string; command: string };
+  | { kind: "wasm"; name: string; url: string; sha256: string; commands: string[] };
 
 export type ShellSource =
   | { kind: "registry"; name: string }
@@ -176,7 +176,7 @@ export class WasixShell implements Shell {
         } else {
           const mod = p.url.split("/").pop()!.replace(/[^A-Za-z0-9._+-]/g, "_");
           modules[mod] = bytes;
-          commands[p.command] = { module: mod };
+          for (const c of p.commands) commands[c] = { module: mod };
         }
       }
       if (Object.keys(modules).length) pkgs.push(await this.wasmer.packages.create({ modules, commands }));

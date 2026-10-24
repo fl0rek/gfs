@@ -71,19 +71,25 @@ if (existsSync(`${machineOut}/manifest.json`)) {
   const m = JSON.parse(readFileSync(`${machineOut}/manifest.json`, "utf8"));
   const dest = new URL("../public/machine/", import.meta.url);
   mkdirSync(dest, { recursive: true });
+  // one package per module, listing every command it provides (coreutils is one multi-call module)
+  const byModule = new Map();
   for (const [cmd, { module }] of Object.entries(m.commands ?? {})) {
+    if (!byModule.has(module)) byModule.set(module, []);
+    byModule.get(module).push(cmd);
+  }
+  for (const [module, cmds] of [...byModule].sort(([a], [b]) => (a.endsWith("bash.wasm") ? -1 : b.endsWith("bash.wasm") ? 1 : a.localeCompare(b)))) {
     const bytes = readFileSync(`${machineOut}/${module}`);
     const sha = createHash("sha256").update(bytes).digest("hex");
     const file = module.split("/").pop();
     writeFileSync(new URL(file, dest), bytes);
-    systemPackages.push({ kind: "wasm", name: `nix:${file}`, url: `machine/${file}`, sha256: sha, command: cmd });
+    systemPackages.push({ kind: "wasm", name: `nix:${file}`, url: `machine/${file}`, sha256: sha, commands: cmds.sort() });
   }
   const nixCmds = Object.keys(m.commands ?? {});
-  systemName = `nix-built (${nixCmds.join(", ")}; llvm ${m.toolchain?.llvm ?? "?"}, sysroot ${m.sysroot?.release ?? "?"})`;
-  console.log(`machine: ${nixCmds.length} nix-built command(s): ${nixCmds.join(", ")}`);
+  const pkgNames = Object.entries(m.built ?? {}).map(([k, v]) => (v.version ? `${k} ${v.version}` : k)).join(", ");
+  systemName = `nix-built: ${pkgNames} (${nixCmds.length} commands; llvm ${m.toolchain?.llvm ?? "?"}, sysroot ${m.sysroot?.release ?? "?"})`;
+  console.log(`machine: ${byModule.size} module(s), ${nixCmds.length} command(s)`);
   if (nixCmds.includes("bash")) {
-    // bash from Nix; keep Wasmer's coreutils for the utilities until the flake provides them.
-    for (const [name, sha] of Object.entries(PACKAGES)) if (!name.startsWith("wasmer/bash")) systemPackages.push({ kind: "webc", name, url: `packages/${sha}.webc`, sha256: sha });
+    // A complete Nix-built system: nothing from the registry.
   } else {
     for (const [name, sha] of Object.entries(PACKAGES)) systemPackages.push({ kind: "webc", name, url: `packages/${sha}.webc`, sha256: sha });
     systemName += " + wasmer registry bash/coreutils";

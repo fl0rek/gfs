@@ -203,7 +203,7 @@ function systemPrompt() {
     "<environment>",
     `Your working directory is ${CWD}. It is a comb: a versioned directory whose every tool call becomes one history entry. The past is readable at ${CWD}@<entry-id>/<path>.`,
     `/nix is the comb holding the running system's flake: machine.json lists the packages the shell sandbox runs, pinned by sha256; editing it (any tool call that changes it) switches the system; flake.nix is its source but cannot be built here. /proc is read-only and describes this session: read /proc to list it (session, model, turn, combs, system, shell, egress, mounts).`,
-    `bash runs in a WASIX sandbox over ${CWD} only; what it has is in /proc/shell (GNU bash + coreutils by default: no grep, sed, awk, find or git). It has no network; use the fetch tool for HTTP. Prefer the read tool over cat.`,
+    `bash runs in a WASIX sandbox over ${CWD} only; the commands it has are listed in /proc/shell (the Nix-built system has bash, coreutils, grep, sed, awk, find, xargs, diff; no git). It has no network; use the fetch tool for HTTP. Prefer the read tool over cat.`,
     "</environment>",
     "",
     `<cwd>${CWD}</cwd>`,
