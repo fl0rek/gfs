@@ -18,10 +18,6 @@ export interface ToolContext {
   /** The current shell (it changes on a system switch); resolves once any boot in progress is over. */
   shell: () => Promise<Shell>;
   fetch: typeof fetch;
-  /** /proc reader */
-  proc: (path: string) => string;
-  /** every /proc file, for mirroring into the shell */
-  procAll: () => Record<string, string>;
   author: () => Author;
   turnId: () => string;
   /** Called after a tool call produced a history entry. */
@@ -65,14 +61,12 @@ async function commitAll(ctx: ToolContext, toolCallId: string, toolName: string,
 
 function readBytes(ctx: ToolContext, p: string): { bytes: Uint8Array; where: string } {
   const r = resolvePath(p);
-  if (r.kind === "proc") return { bytes: new TextEncoder().encode(ctx.proc(r.path)), where: displayPath(r) };
   const bytes = r.at ? ctx.dc.readFileAt(r.at, r.path) : ctx.dc.readFile(r.comb, r.path);
   return { bytes, where: displayPath(r) };
 }
 
 function writable(p: string) {
   const r = resolvePath(p);
-  if (r.kind === "proc") throw new Error(`${displayPath(r)} is read-only`);
   if (r.at) throw new Error(`${displayPath(r)} is a read-only view of the past`);
   return r;
 }
@@ -261,7 +255,6 @@ export function makeTools(ctx: ToolContext): AgentTool<any, any>[] {
       const t0 = performance.now();
       const sh = await ctx.shell();
       const res = await sh.run(command, {
-        proc: ctx.procAll(),
         timeoutMs: timeout ? timeout * 1000 : undefined,
         signal,
         onData: (chunk) => onUpdate?.({ content: [{ type: "text", text: chunk }], details: undefined }),

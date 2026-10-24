@@ -121,7 +121,7 @@ async function init(shellParam?: string): Promise<InitInfo> {
           "- `machine.json` is the built system: the packages the shell sandbox loads, each pinned by sha256. Change it and commit (any tool call that edits it does) and the shell is rebuilt from the new manifest: that is the switch. A package whose bytes don't match its hash is refused and the old system keeps running.",
           "- `flake.nix` is the source of that system. The browser cannot run `nix build`; CI (or your machine) builds the flake and publishes the result, which then lands here as a new `machine.json`.",
           "",
-          "Every switch is a history entry of this comb, so `/proc/system` and the timeline show which system was running when.",
+          "Every switch is a history entry of this comb, so the timeline shows which system was running when.",
           "",
         ].join("\n"),
       );
@@ -184,41 +184,6 @@ async function switchSystem(reason: string): Promise<boolean> {
   return true;
 }
 
-/** /proc: the running session, generated on read. */
-function procEntries(): Record<string, () => string> {
-  const j = (v: unknown) => JSON.stringify(v, null, 2) + "\n";
-  return {
-    "session": () => j({ id: sessionId, node: NODE, started: new Date(startedAt).toISOString(), turn: currentTurnId || null, turns: turnIndex, harness: "pi", model: `${config.provider}/${config.model}` }),
-    "model": () => `${config.provider}/${config.model}\n`,
-    "turn": () => (currentTurnId || "") + "\n",
-    "combs": () => dc.listCombs().map((c) => `${c}\t${dc.head(c)}`).join("\n") + "\n",
-    "system": () =>
-      j(runningSystem ? { entry: runningSystem.entry, path: `/nix@${runningSystem.entry}`, switched: new Date(runningSystem.switchedAt).toISOString(), name: runningSystem.manifest.name ?? null, shell: runningSystem.manifest.shell, packages: runningSystem.manifest.packages.map((p) => `${p.name} ${p.sha256.slice(0, 12)}`) } : { entry: null, note: "no system (shell disabled or not switched yet)" }),
-    "shell": () => j({ ready: shell instanceof WasixShell, booting: !!(pendingBoot || bootInProgress), commands: shell.commands() }),
-    "egress": () => egressMode() + "\n",
-    "mounts": () => ["/datacombs\tdatacombs\trw", "/nix\tcomb nix\trw (commit = switch)", "/proc\tproc\tro"].join("\n") + "\n",
-    "uptime": () => `${Math.round((Date.now() - startedAt) / 1000)}\n`,
-  };
-}
-function procAll(): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [k, f] of Object.entries(procEntries())) {
-    try {
-      out[k] = f();
-    } catch (e: any) {
-      out[k] = `error: ${e.message}\n`;
-    }
-  }
-  return out;
-}
-function procRead(path: string): string {
-  const entries = procEntries();
-  if (path === "") return Object.keys(entries).join("\n") + "\n";
-  const f = entries[path];
-  if (!f) throw new Error(`/proc/${path}: not found`);
-  return f();
-}
-
 function restoreTranscript(): AgentMessage[] {
   try {
     if (dc.exists(SESSION_COMB, "transcript.json")) {
@@ -254,8 +219,8 @@ function systemPrompt() {
     "",
     "<environment>",
     `Your working directory is ${CWD}. It is a comb: a versioned directory whose every tool call becomes one history entry. The past is readable at ${CWD}@<entry-id>/<path>.`,
-    `/nix is the comb holding the running system's flake: machine.json lists the packages the shell sandbox runs, pinned by sha256; editing it (any tool call that changes it) switches the system; flake.nix is its source but cannot be built here. /proc is read-only and describes this session: read /proc to list it (session, model, turn, combs, system, shell, egress, mounts).`,
-    `bash runs in a WASIX sandbox over the same root (/datacombs/<comb>, /nix, /proc; the @<entry> views are not mounted there); the commands it has are listed in /proc/shell (the Nix-built system has bash, coreutils, grep, sed, awk, find, xargs, diff; no git). It has no network; use the fetch tool for HTTP. Prefer the read tool over cat.`,
+    `/nix is the comb holding the running system's flake: machine.json lists the packages the shell sandbox runs, pinned by sha256; editing it (any tool call that changes it) switches the system; flake.nix is its source but cannot be built here.`,
+    `bash runs in a WASIX sandbox over the same root (/datacombs/<comb> and /nix; the @<entry> views are not mounted there). The Nix-built system has bash, coreutils, grep, sed, awk, find, xargs, diff; no git. It has no network; use the fetch tool for HTTP. Prefer the read tool over cat.`,
     "</environment>",
     "",
     `<cwd>${CWD}</cwd>`,
@@ -300,8 +265,6 @@ function makeToolsFor() {
     dc,
     shell: currentShell,
     fetch: smartFetch,
-    proc: procRead,
-    procAll,
     author,
     turnId,
     onEntry: async (comb) => {
@@ -443,7 +406,7 @@ async function handle(req: Request): Promise<unknown> {
       status(`$ ${req.command}`, true);
       let res;
       try {
-        res = await (await currentShell()).run(req.command, { cwd: CWD, timeoutMs: req.timeoutMs, proc: procAll() });
+        res = await (await currentShell()).run(req.command, { cwd: CWD, timeoutMs: req.timeoutMs });
       } finally {
         status("shell ready", false);
       }

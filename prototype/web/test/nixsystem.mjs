@@ -16,10 +16,8 @@ await page.goto("http://localhost:4173/", { waitUntil: "load" });
 await page.waitForFunction(() => window.__pi.state().info?.system, { timeout: 180000 });
 const st = await page.evaluate(() => window.__pi.state());
 check(/nix-built/.test(st.info.system.name), `system: ${st.info.system.name.slice(0, 80)}… (boot ${Date.now() - t0}ms)`);
-const sys = JSON.parse(text(await tool("read", { path: "/proc/system" })));
-check(sys.packages.every((p) => p.startsWith("nix:")), `every package is Nix-built (${sys.packages.length} modules)`);
-const sh = JSON.parse(text(await tool("read", { path: "/proc/shell" })));
-check(sh.commands.length >= 100 && ["bash", "grep", "sed", "awk", "find", "xargs", "diff", "sort", "sha256sum"].every((c) => sh.commands.includes(c)), `/proc/shell: ${sh.commands.length} commands incl. grep/sed/awk/find/diff`);
+const m = JSON.parse(text(await tool("read", { path: "/nix/machine.json" })));
+check(m.packages.every((p) => p.name.startsWith("nix:")), `every package is Nix-built (${m.packages.length} modules)`);
 const script = `
 set -e
 bash --version | head -1

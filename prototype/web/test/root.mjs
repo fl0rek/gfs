@@ -1,4 +1,4 @@
-// bash sees the gfs root: /datacombs/<comb>, /nix, /proc; writes under /nix switch the system.
+// bash sees the gfs root: /datacombs/<comb> and /nix; writes under /nix switch the system.
 import puppeteer from "puppeteer-core";
 const browser = await puppeteer.launch({ executablePath: process.env.CHROME ?? "/opt/pw-browsers/chromium-1248/chrome-linux64/chrome", headless: true, protocolTimeout: 180000, args: ["--no-sandbox", "--disable-gpu"] });
 const page = await browser.newPage();
@@ -10,16 +10,15 @@ const tool = (name, params) => call({ method: "debugTool", name, params });
 const text = (r) => r.content.map((c) => c.text).join("");
 await page.goto("http://localhost:4173/", { waitUntil: "load" });
 await page.waitForFunction(() => window.__pi.state().info?.system || /unavailable|refused|failed/.test(window.__pi.state().statusText), { timeout: 180000 });
-const r1 = await tool("bash", { command: "pwd; ls /; ls /datacombs; ls /nix; ls /proc" });
+const r1 = await tool("bash", { command: "pwd; ls /; ls /datacombs; ls /nix" });
 console.log("  " + text(r1).trim().split("\n").join("\n  "));
 const o = text(r1);
 check(/^\/datacombs\/workspace$/m.test(o), "cwd is /datacombs/workspace");
-check(/datacombs/.test(o) && /\bnix\b/.test(o) && /\bproc\b/.test(o), "/ has datacombs, nix, proc");
+check(/datacombs/.test(o) && /\bnix\b/.test(o), "/ has datacombs and nix");
 check(/session/.test(o) && /workspace/.test(o), "/datacombs lists the combs");
 check(/machine\.json/.test(o) && /flake\.nix/.test(o), "/nix has the flake and the manifest");
-check(/system/.test(o) && /shell/.test(o), "/proc has entries");
-const r2 = await tool("bash", { command: "cat /proc/model; grep -c '\"kind\"' /nix/machine.json; head -c 60 /datacombs/session/transcript.json" });
-check(/mock\/scripted-agent/.test(text(r2)) && /^12$/m.test(text(r2)), `reads across the root: ${JSON.stringify(text(r2)).slice(0, 100)}`);
+const r2 = await tool("bash", { command: "grep -c '\"kind\"' /nix/machine.json; ls /datacombs/session" });
+check(/^12$/m.test(text(r2)), `reads across the root: ${JSON.stringify(text(r2)).slice(0, 100)}`);
 // a write under /nix from the shell is a switch
 const before = await page.evaluate(() => window.__pi.state().info.system.entry);
 const r3 = await tool("bash", { command: `sed -i 's/"name": "[^"]*"/"name": "renamed from bash"/' /nix/machine.json && grep name /nix/machine.json` });
@@ -29,12 +28,6 @@ const st = await page.evaluate(() => window.__pi.state());
 check(st.info.system.name === "renamed from bash", `…switched the system: ${st.info.system.name}`);
 const nixLog = await call({ method: "log", comb: "nix" });
 check(nixLog[0].tool_name === "bash", "…as a bash tool-call entry on /nix");
-const r4 = await tool("bash", { command: "echo nope > /proc/model; cat /proc/model" });
-check(/nope/.test(text(r4)), "a write to /proc is accepted in the sandbox…");
-const r5 = await tool("bash", { command: "cat /proc/model" });
-check(!/nope/.test(text(r5)), "…and dropped: /proc is regenerated");
-const wsLog = await call({ method: "log", comb: "workspace" });
-check(!wsLog.some((e) => e.summary.added.some((p) => p.includes("proc"))), "nothing from /proc leaked into a comb");
 await browser.close();
 console.log(failures ? `${failures} FAILED` : "all checks passed");
 process.exit(failures ? 1 : 0);

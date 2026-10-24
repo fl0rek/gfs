@@ -5,7 +5,6 @@
 // every command sees the root the harness sees:
 //   /datacombs/<comb>   every comb's working tree (read-write)
 //   /nix                the nix comb (read-write; a change there is a switch)
-//   /proc               a snapshot of the session (writes are dropped)
 // Two SDK facts shape how: the host may only touch `/workspace`, and changes
 // to `/` do not survive from one guest process to the next. So the host keeps
 // an incremental mirror under /workspace/.gfs, and each command runs inside a
@@ -32,8 +31,6 @@ export interface RunOptions {
   onData?: (chunk: string) => void;
   cwd: string;
   env?: Record<string, string>;
-  /** /proc contents to expose, path → text. */
-  proc?: Record<string, string>;
 }
 
 export interface RunResult {
@@ -91,7 +88,7 @@ export function installRegistryShim(base: URL, index: { packages: Record<string,
  * a raw `.wasm` module is one command.
  */
 export interface SystemManifest {
-  /** Free-form label shown in /proc/system. */
+  /** Free-form label shown in the header. */
   name?: string;
   shell: string;
   packages: SystemPackage[];
@@ -130,7 +127,6 @@ export class WasixShell implements Shell {
   private ready: Promise<void> | null = null;
   /** What the sandbox currently holds per comb: path → blob hash. */
   private mirrored = new Map<string, Map<string, string>>();
-  private procFiles = new Set<string>();
 
   constructor(
     private dc: Datacombs,
@@ -210,7 +206,7 @@ export class WasixShell implements Shell {
     this.status("creating sandbox…", true);
     // Dependencies first, so the shell's `use` edges resolve against what is already installed.
     this.sandbox = await this.wasmer.sandboxes.create({ packages: [...this.extraPkgs, this.pkg] });
-    for (const d of [`${STAGE}/datacombs`, `${STAGE}/nix`, `${STAGE}/proc`]) await this.sandbox.fs.mkdir(d, { recursive: true }).catch(() => {});
+    for (const d of [`${STAGE}/datacombs`, `${STAGE}/nix`]) await this.sandbox.fs.mkdir(d, { recursive: true }).catch(() => {});
     this.mirrored.clear();
     this.status("shell ready", false);
   }
@@ -218,7 +214,7 @@ export class WasixShell implements Shell {
   async run(command: string, opts: RunOptions): Promise<RunResult> {
     await this.warmup();
     const sandbox = this.sandbox!;
-    await this.syncIn(opts.proc ?? {});
+    await this.syncIn();
     const env = {
       HOME: opts.cwd,
       PWD: opts.cwd,
@@ -252,8 +248,8 @@ export class WasixShell implements Shell {
     }
   }
 
-  /** Bring every comb and /proc up to date in the sandbox. */
-  private async syncIn(proc: Record<string, string>) {
+  /** Bring every comb up to date in the sandbox's staging mirror. */
+  private async syncIn() {
     const fs = this.sandbox!.fs;
     const combs = this.dc.listCombs();
     // combs that vanished (not expected, but keep the mirror honest)
@@ -278,10 +274,6 @@ export class WasixShell implements Shell {
       }
       this.mirrored.set(comb, want);
     }
-    // /proc: rewritten every time; small
-    for (const name of this.procFiles) if (!(name in proc)) await fs.remove(`${STAGE}/proc/${name}`).catch(() => {});
-    for (const [name, text] of Object.entries(proc)) await fs.writeText(`${STAGE}/proc/${name}`, text);
-    this.procFiles = new Set(Object.keys(proc));
   }
 
   /** Write back what the command changed under any comb. Returns the combs that changed. */
@@ -346,7 +338,6 @@ const outDir = (comb: string) => `${STAGE}/out${combDir(comb)}`;
 const WRAPPER = [
   `cp -a ${STAGE}/datacombs /datacombs || echo "gfs: could not materialise /datacombs" >&2`,
   `cp -a ${STAGE}/nix /nix || echo "gfs: could not materialise /nix" >&2`,
-  `cp -a ${STAGE}/proc /proc || echo "gfs: could not materialise /proc" >&2`,
   'cd "$GFS_CWD" 2>/dev/null || cd /datacombs/workspace',
   'bash -c "$GFS_CMD"',
   "rc=$?",

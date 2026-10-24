@@ -4,7 +4,6 @@
 //   /datacombs/<comb>            a comb's checkout (read-write)
 //   /datacombs/<comb>@<entry>    that comb as it was at one history entry (read-only)
 //   /nix                         the comb holding the running system's flake; commit = switch
-//   /proc                        the running session, generated on read (read-only)
 // The harness's cwd is `/datacombs/workspace`.
 
 export const DATACOMBS = "/datacombs";
@@ -12,16 +11,14 @@ export const WORKSPACE = "workspace";
 export const NIX_COMB = "nix";
 export const CWD = `${DATACOMBS}/${WORKSPACE}`;
 
-export type Resolved =
-  | {
-      kind: "comb";
-      comb: string;
-      /** Entry id when the path addresses a read-only view of the past. */
-      at?: string;
-      /** Path inside the comb, no leading slash; "" is the comb root. */
-      path: string;
-    }
-  | { kind: "proc"; path: string };
+export interface Resolved {
+  kind: "comb";
+  comb: string;
+  /** Entry id when the path addresses a read-only view of the past. */
+  at?: string;
+  /** Path inside the comb, no leading slash; "" is the comb root. */
+  path: string;
+}
 
 export function resolvePath(p: string, cwd = CWD): Resolved {
   const abs = p.startsWith("/") ? p : `${cwd}/${p}`;
@@ -34,13 +31,12 @@ export function resolvePath(p: string, cwd = CWD): Resolved {
     }
     parts.push(seg);
   }
-  if (parts[0] === "proc") return { kind: "proc", path: parts.slice(1).join("/") };
   if (parts[0] === "nix") {
     const [spec, ...rest] = [NIX_COMB, ...parts.slice(1)];
     return { kind: "comb", comb: spec, path: rest.join("/") };
   }
   if (parts[0] !== "datacombs" || parts.length < 2) {
-    throw new Error(`${p}: outside gfs (reachable: ${DATACOMBS}/<comb>/..., /nix/..., /proc/...)`);
+    throw new Error(`${p}: outside gfs (reachable: ${DATACOMBS}/<comb>/... and /nix/...)`);
   }
   const combSpec = parts[1];
   const path = parts.slice(2).join("/");
@@ -52,7 +48,6 @@ export function resolvePath(p: string, cwd = CWD): Resolved {
 }
 
 export function displayPath(r: Resolved): string {
-  if (r.kind === "proc") return r.path ? `/proc/${r.path}` : "/proc";
   if (r.comb === NIX_COMB && !r.at) return r.path ? `/nix/${r.path}` : "/nix";
   const comb = r.at ? `${r.comb}@${r.at.slice(0, 8)}` : r.comb;
   return r.path ? `${DATACOMBS}/${comb}/${r.path}` : `${DATACOMBS}/${comb}`;
