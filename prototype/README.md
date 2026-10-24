@@ -10,7 +10,11 @@ What it is:
 - **`!cmd`** in the console runs in that same shell directly, as you. Changes land as an `external` entry (author: you at the shell), distinct from pi's tool calls.
 - **Persistence** is OPFS: every object and ref is written as it is created and loaded back on start. Reload the tab; the history, the files and the conversation are still there.
 - **The conversation is itself a comb** (`/datacombs/session`): the transcript is committed once per turn, so "what was said" and "what changed" live in the same kind of history.
-- Two views: pi's console, and the timeline of a comb from genesis to now, with the conversation interleaved, per-entry diffs, the tool-call arguments, the tree at any point (`/datacombs/<comb>@<entry>`), rollback and chain verification.
+- **Network**: pi has a `fetch` tool. A page can only fetch what CORS allows, so `prototype/extension/` is the escape hatch: a WebExtension that relays fetches with host permissions; the worker falls back to it whenever a direct fetch is refused, for the tool and for the LLM calls alike. No relay server anywhere. bash has no sockets (an extension can't give TCP).
+- **`/proc`**: read-only, generated on read: `session`, `model`, `turn`, `combs`, `system`, `shell`, `egress`, `mounts`, `uptime`.
+- **`/nix`**: a comb holding the running system's flake (`flake.nix`) and its built form (`machine.json`: the packages the shell sandbox loads, each pinned by sha256). Any history entry that changes `machine.json` rebuilds the shell from it — commit is switch. A package whose bytes don't match is refused and the old system keeps running; rolling `/nix` back switches back. The header shows `system /nix@<entry>`.
+- **`machine/`**: the Nix flake that builds that system: a `wasixStdenv` (stock nixpkgs LLVM + the prebuilt wasix-libc sysroot) and GNU bash and utilities as WASIX wasm. CI builds it and the web build turns its output into the deployed `machine.json`; Wasmer's registry packages fill in whatever the flake doesn't provide yet. See `machine/NOTES.md`.
+- Two views: pi's console, and the timeline of a comb from genesis to now, with the conversation interleaved, per-entry diffs, the tool-call arguments, the tree at any point (`/datacombs/<comb>@<entry>`), rollback and chain verification. A Files view lets you edit a comb by hand; saving is an `external` entry, which on `/nix` is the hand-driven switch.
 
 ## Run it
 
@@ -29,7 +33,7 @@ The dev server sends COOP/COEP headers (the WASIX runtime needs `SharedArrayBuff
 
 Models: **mock** (default) is a scripted agent that writes, runs bash, edits and answers, so everything works offline. **DeepSeek** and **OpenCode Zen** are wired through pi-ai; paste a key in the console (kept in `sessionStorage`, sent straight to the provider from the worker; CORS is the provider's decision). "openai-compatible" takes any base URL.
 
-Tests: `cargo test` in `gfs-core/`; `node test/e2e.mjs` drives the built page in headless Chromium (`CHROME=/path/to/chromium`, with `pnpm build && pnpm preview` running) through a prompt, rollback, reload, verification and a `!` command. `--shell=none` skips the WASIX shell; `test/offline.mjs` proves the shell runs with wasmer.io blocked.
+Tests (headless Chromium; `CHROME=/path/to/chromium`, with `pnpm build && pnpm preview` running): `test/e2e.mjs [url] [--extension]` runs a prompt, rollback, reload, verification and a `!` command; `test/system.mjs` covers `/proc` and `/nix` switching (good manifest, bad hash, rollback, reload); `test/egress.mjs` the fetch paths with and without the extension; `test/editor.mjs` the hand edit of `/nix`; `test/offline.mjs` proves the shell runs with wasmer.io blocked. `cargo test` in `gfs-core/`.
 
 ## What this prototype says
 
