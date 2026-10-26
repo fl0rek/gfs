@@ -1,8 +1,8 @@
 // PROTOTYPE. The page: pi's console on the left, the comb's history on the right.
 
 import { AgentWorker } from "./rpc";
-import type { EntryDetail, HistoryEntry, InitInfo, ModelConfig, VerifyReport } from "./protocol";
-import { CWD, WORKSPACE } from "./paths";
+import type { EntryDetail, HistoryEntry, InitInfo, MachineView, ModelConfig, VerifyReport } from "./protocol";
+import { CWD, NIX_COMB, VIEW_PATH, WORKSPACE } from "./paths";
 
 const worker = new AgentWorker();
 const app = document.getElementById("app")!;
@@ -32,6 +32,13 @@ let treeAt: { entryId: string; files: [string, string, number][]; open?: { path:
 let filesView: { comb: string; files: [string, string, number][]; open?: { path: string; text: string; dirty: boolean } } | null = null;
 let error: string | null = null;
 let config: ModelConfig = loadConfig();
+// Surfaces: the console (chat + history) or the view, the page the harness programs for itself at /nix/view/index.html.
+// You switch; the harness only controls what is inside the view.
+type Surface = "console" | "view";
+let surface: Surface = (sessionStorage.getItem("pi-on-gfs.surface") as Surface) === "view" ? "view" : "console";
+let viewStale = false; // /nix changed while you were on the console
+let viewEntry: string | null = null; // the /nix entry the frame was rendered from
+let viewError: string | null = null;
 
 function loadConfig(): ModelConfig {
   try {
@@ -107,6 +114,10 @@ worker.on(async (n) => {
   } else if (n.type === "history") {
     if (info) info.objectCount = n.objectCount;
     await refreshLog(n.comb);
+    if (n.comb === NIX_COMB) {
+      if (surface === "view") void loadView();
+      else viewStale = true;
+    }
     render();
   } else if (n.type === "agent") {
     await onAgentEvent(n.event as any);
@@ -261,6 +272,61 @@ async function saveFile() {
   render();
 }
 
+// ---------- the view ----------
+// The frame lives outside #app so re-renders of the page never reload it (moving an iframe in the DOM reloads it).
+const viewHost = h("div", { class: "view-host", hidden: true }) as HTMLDivElement;
+const viewFrame = h("iframe", { class: "view-frame", sandbox: "allow-scripts allow-forms", title: "view" }) as HTMLIFrameElement;
+viewHost.append(viewFrame);
+document.body.append(viewHost);
+let viewTimer: number | null = null;
+
+function setSurface(s: Surface) {
+  surface = s;
+  try { sessionStorage.setItem("pi-on-gfs.surface", s); } catch {}
+  if (s === "view") { viewStale = false; void loadView(); }
+  else stopViewUpdates();
+  render();
+}
+
+/** Read /nix/view/index.html and render it in the sandbox with a fresh /machine snapshot. */
+async function loadView() {
+  stopViewUpdates();
+  viewError = null;
+  try {
+    const snap = await worker.call<MachineView>({ method: "machine" });
+    if (!snap.view.entry) throw new Error("no /nix comb (shell disabled?)");
+    const html = await worker.call<string>({ method: "file", comb: NIX_COMB, path: VIEW_PATH });
+    const data = JSON.stringify(snap).replace(/</g, "\\u003c");
+    const boot = `<script>(function(){var D=${data};var fns=[];window.ue={machine:D.machine,view:D.view,prompt:function(t){parent.postMessage({type:"ue:prompt",text:String(t)},"*")},onUpdate:function(f){fns.push(f)}};window.addEventListener("message",function(e){var d=e.data;if(!d||d.type!=="ue:machine")return;window.ue.machine=d.machine;window.ue.view=d.view;fns.forEach(function(f){try{f()}catch(err){console.error(err)}})});})();<\/script>`;
+    const at = html.search(/<head[^>]*>/i);
+    viewFrame.srcdoc = at >= 0 ? html.slice(0, html.indexOf(">", at) + 1) + boot + html.slice(html.indexOf(">", at) + 1) : boot + html;
+    viewEntry = snap.view.entry;
+    viewTimer = window.setInterval(pushMachine, 4000);
+  } catch (e: any) {
+    viewError = e.message;
+  }
+  render();
+}
+async function pushMachine() {
+  if (surface !== "view" || !viewFrame.contentWindow) return;
+  try {
+    const snap = await worker.call<MachineView>({ method: "machine" });
+    viewFrame.contentWindow.postMessage({ type: "ue:machine", ...snap }, "*");
+  } catch {}
+}
+function stopViewUpdates() {
+  if (viewTimer != null) clearInterval(viewTimer);
+  viewTimer = null;
+}
+// The view may ask the harness for something; that is a prompt from you, in the console.
+window.addEventListener("message", (ev) => {
+  if (ev.source !== viewFrame.contentWindow || !ev.data || ev.data.type !== "ue:prompt") return;
+  const text = String(ev.data.text ?? "").trim();
+  if (!text) return;
+  statusText = `sent to pi from the view: ${text.slice(0, 60)}`;
+  void send(text);
+});
+
 async function wipe() {
   if (!confirm("Wipe everything stored in this browser (all combs, the whole history, the transcript)?")) return;
   await worker.call({ method: "wipe" });
@@ -289,6 +355,10 @@ function renderInner() {
   app.replaceChildren(h("div", { class: "root" },
     h("header", { class: "top" },
       h("div", { class: "brand" }, h("b", {}, "pi on gfs"), h("span", { class: "muted" }, " · prototype, throwaway")),
+      h("div", { class: "surfaces", role: "tablist" },
+        h("button", { class: `tab${surface === "console" ? " active" : ""}`, role: "tab", "aria-selected": surface === "console", onClick: () => setSurface("console") }, "console"),
+        h("button", { class: `tab${surface === "view" ? " active" : ""}`, role: "tab", "aria-selected": surface === "view", title: `/nix/${VIEW_PATH}`, onClick: () => setSurface("view") }, "view", viewStale ? h("span", { class: "dot", title: "/nix changed; the view will re-render" }) : null),
+      ),
       h("div", { class: "status" },
         busy || statusText.endsWith("…") ? h("span", { class: "spinner" }) : null,
         h("span", {}, statusText),
@@ -299,8 +369,23 @@ function renderInner() {
     ),
     error ? h("div", { class: "error" }, error, h("button", { class: "link", onClick: () => { error = null; render(); } }, "dismiss")) : null,
     systemNotice ? h("div", { class: "notice" }, "system ", systemNotice, h("button", { class: "link", onClick: () => { systemNotice = null; render(); } }, "ok")) : null,
-    h("main", { class: "split" }, renderConsole(), renderTimeline()),
+    surface === "view" ? renderViewSurface() : h("main", { class: "split" }, renderConsole(), renderTimeline()),
   ));
+  // The frame is fixed under the header; show it only on the view surface.
+  const main = app.querySelector("main");
+  viewHost.hidden = surface !== "view" || !!viewError;
+  if (main && surface === "view") viewHost.style.top = `${main.getBoundingClientRect().top}px`;
+}
+
+function renderViewSurface() {
+  return h("main", { class: "view-surface" },
+    viewError
+      ? h("div", { class: "empty", style: "padding:14px" }, h("p", {}, "The view could not be rendered: ", viewError), h("button", { onClick: () => void loadView() }, "Retry"))
+      : h("div", { class: "view-bar muted small" },
+          h("span", { class: "mono" }, `/nix/${VIEW_PATH}`), viewEntry ? h("span", { class: "mono" }, ` @${short(viewEntry)}`) : null,
+          h("span", {}, " · pi programs this page; it re-renders on every /nix entry"),
+        ),
+  );
 }
 
 function renderConsole() {
@@ -600,6 +685,7 @@ setTimeout(() => {
     transcript = await worker.call({ method: "transcript" });
     for (const c of info.combs) await refreshLog(c);
     render();
+    if (surface === "view") void loadView();
     void worker.call({ method: "boot" });
   } catch (e: any) {
     error = `worker failed to start: ${e.message}`;

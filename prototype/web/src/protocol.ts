@@ -75,13 +75,19 @@ export type Request =
   | { id: number; method: "debugFetch"; url: string }
   | { id: number; method: "debugTool"; name: string; params: unknown }
   | { id: number; method: "saveFile"; comb: string; path: string; content: string } // you, editing outside pi → external entry
-  | { id: number; method: "freeStatus" }; // the free-tier router's view of its models
+  | { id: number; method: "freeStatus" } // the free-tier router's view of its models
+  | { id: number; method: "machine" }; // snapshot of /machine for the view, plus where the view comes from
 
 /** Page → worker, outside the RPC: a response event from the egress bridge. */
 export interface BridgeInbound {
   bridge: true;
   id: number;
   event: import("./egress").BridgeEvent;
+}
+
+export interface MachineView {
+  machine: Record<string, string>;
+  view: { entry: string | null; path: string };
 }
 
 export interface EntryDetail {

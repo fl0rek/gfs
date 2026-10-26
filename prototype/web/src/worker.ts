@@ -19,6 +19,8 @@ import { Datacombs, type EntryKind } from "./gfs";
 import { makeTools } from "./tools";
 import { WasixShell, UnavailableShell, installRegistryShim, loadDeployedSystem, processLog, runtimeHeapBytes, type Shell, type SystemManifest } from "./shell";
 import { readMachine, machineSnapshot, type MachineSources } from "./machine";
+import seedView from "./view-seed.html?raw";
+import { VIEW_PATH } from "./paths";
 import { GfsHostFs } from "./hostfs";
 import { createMockProvider, MOCK_MODEL_ID, MOCK_PROVIDER_ID } from "./mock-model";
 import { CWD, WORKSPACE, NIX_COMB, resolvePath } from "./paths";
@@ -139,11 +141,17 @@ async function init(shellParam?: string, trace?: boolean): Promise<InitInfo> {
           "",
           "- `machine.json` is the built system: the packages the shell sandbox loads, each pinned by sha256. Change it and commit (any tool call that edits it does) and the shell is rebuilt from the new manifest: that is the switch. A package whose bytes don't match its hash is refused and the old system keeps running.",
           "- `flake.nix` is the source of that system. The browser cannot run `nix build`; CI (or your machine) builds the flake and publishes the result, which then lands here as a new `machine.json`.",
+          "- `view/index.html` is the view: the page shown when the user switches from the console to View. It is rendered in a sandbox with `window.ue` (a snapshot of /machine) and re-rendered on every history entry of this comb, so editing it is how you change what the user sees there.",
           "",
           "Every switch is a history entry of this comb, so the timeline shows which system was running when.",
           "",
         ].join("\n"),
       );
+      await dc.commit(NIX_COMB, { kind: "external" }, { session: sessionId, harness: "system", model: "", principal: "user" });
+    }
+    // The view: a page the harness programs for itself, kept in /nix. Seeded once; after that it is whatever the comb says.
+    if (!dc.listAll(NIX_COMB).some(([p]) => p === VIEW_PATH)) {
+      dc.writeFile(NIX_COMB, VIEW_PATH, seedView);
       await dc.commit(NIX_COMB, { kind: "external" }, { session: sessionId, harness: "system", model: "", principal: "user" });
     }
     // Don't block the page on 18 MB of wasm: the system comes up after init returns.
@@ -295,6 +303,7 @@ function systemPrompt() {
     "<environment>",
     `Your working directory is ${CWD}, which holds the combs: versioned directories whose every tool call becomes one history entry. Work in ${CWD}/${WORKSPACE} (relative paths start at ${CWD}, so write workspace/notes.md, not notes.md). A comb's past is readable at ${CWD}/<comb>@<entry-id>/<path>.`,
     `/nix is the comb holding the running system's flake: machine.json lists the packages the shell sandbox runs, pinned by sha256; editing it (any tool call that changes it) switches the system; flake.nix is its source but cannot be built here.`,
+    `/nix/view/index.html is the view: a page the user can switch to instead of this console. You own it: edit it (any tool call that changes it commits it) and it re-renders on the next history entry. It runs in a sandbox with window.ue = { machine: <every /machine entry as text>, view: { entry, path }, prompt(text) }; call ue.onUpdate(fn) to redraw when a fresh snapshot arrives. No network, no access to the page around it.`,
     `/machine is read-only and describes this node (read /machine for the index: session, system, shell, processes, runtime, agent, storage, egress, mounts, uptime).`,
     `bash runs in a WASIX sandbox with the same root mounted live (/datacombs/<comb>, /datacombs/<comb>@<entry>, /nix, /machine), cwd ${CWD}. The Nix-built system has bash, coreutils, grep, sed, awk, find, xargs, diff; no git. It has no network; use the fetch tool for HTTP. Prefer the read tool over cat.`,
     "</environment>",
@@ -543,6 +552,8 @@ async function handle(req: Request): Promise<unknown> {
       }
       return { output: res.output + refused, exitCode: refused ? 1 : res.exitCode };
     }
+    case "machine":
+      return { machine: await machineSnapshot(machineSources), view: { entry: dc.hasComb(NIX_COMB) ? dc.head(NIX_COMB) : null, path: `/nix/${VIEW_PATH}` } };
     case "wipe":
       await dc.wipe();
       return null;

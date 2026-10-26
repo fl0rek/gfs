@@ -10,6 +10,8 @@
 export const DATACOMBS = "/datacombs";
 export const WORKSPACE = "workspace";
 export const NIX_COMB = "nix";
+/** The view the harness programs for itself, inside the nix comb. */
+export const VIEW_PATH = "view/index.html";
 export const CWD = DATACOMBS;
 
 export type Resolved =
