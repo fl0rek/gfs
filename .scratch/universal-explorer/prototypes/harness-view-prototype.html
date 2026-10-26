@@ -64,6 +64,11 @@ button.primary{background:var(--accent);color:var(--accent-ink);border-color:var
 .ask{display:flex;gap:8px;margin-top:14px}
 .ask input{flex:1;min-width:0;font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--fg)}
 .toast{margin-top:8px;font-size:.85rem;color:var(--mute)}
+.chat{display:flex;flex-direction:column;gap:8px;margin:10px 0}
+.msg{max-width:46ch;padding:8px 12px;border-radius:12px;font-size:.92rem}
+.msg.you{align-self:flex-end;background:var(--accent);color:var(--accent-ink);border-bottom-right-radius:3px}
+.msg.them{align-self:flex-start;background:color-mix(in srgb,var(--line) 55%,transparent);border-bottom-left-radius:3px}
+.tab .pill{margin-left:4px;vertical-align:middle}
 
 /* B: document + source */
 .doc{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px;min-width:0}
@@ -107,12 +112,23 @@ button.primary{background:var(--accent);color:var(--accent-ink);border-color:var
 <!-- ================= A: Panels ================= -->
 <section class="variant" id="va" data-name="Panels, with the surface switch" hidden>
   <div class="bar" role="tablist" aria-label="Surface">
-    <button class="tab" role="tab" aria-selected="false">Chat</button>
-    <button class="tab" role="tab" aria-selected="true">View</button>
+    <button class="tab" role="tab" id="tab-chat" aria-selected="false">Chat</button>
+    <button class="tab" role="tab" id="tab-view" aria-selected="true">View <span class="pill ok" id="view-badge" hidden>updated</span></button>
     <span class="spacer"></span>
     <span class="prov"><span>rendered from <b class="mono">nix@a4f1c9</b></span><span>entry 14 · 13:41</span></span>
   </div>
 
+  <div id="side-chat" class="panel" hidden>
+    <div class="lbl">hermes · session s-0412</div>
+    <div class="chat">
+      <div class="msg you">Add the process tree to the view, grouped by host and world.</div>
+      <div class="msg them">Done. I edited <span class="mono">view/introspect.py</span> in the <span class="mono">nix</span> comb; that landed as entry 13 and the view re-rendered.</div>
+      <div class="msg you">Colour the mounts by tier and show which combs this session is granted.</div>
+      <div class="msg them">Entry 14 on <span class="mono">nix</span>. Switch to View to see it.</div>
+    </div>
+    <form class="ask" id="chat-form"><input id="chat-input" placeholder="Message hermes…" aria-label="Message hermes"><button class="primary" type="submit">Send</button></form>
+  </div>
+  <div id="side-view">
   <div class="tiles">
     <div class="tile"><div class="lbl">Uptime</div><div class="v num">2h 07m</div><div class="lbl">world started 11:34</div></div>
     <div class="tile"><div class="lbl">World memory</div><div class="v num">412 MB</div><div class="meter"><i style="width:40%"></i></div><div class="lbl">of 1 GB linear</div></div>
@@ -167,6 +183,7 @@ button.primary{background:var(--accent);color:var(--accent-ink);border-color:var
 
   <form class="ask" id="ask-form"><input id="ask-input" placeholder="Ask the harness to change this view…" aria-label="Ask the harness to change this view"><button class="primary" type="submit">Send</button></form>
   <div class="toast" id="ask-toast">Sent as a chat message; the next history entry on <span class="mono">nix</span> re-renders this.</div>
+  </div>
 </section>
 
 <!-- ================= B: Document and its source ================= -->
@@ -265,6 +282,12 @@ show(current());
 
 // ---- A: ask the harness (stub) ----
 document.getElementById('ask-form').addEventListener('submit',e=>{e.preventDefault();const v=document.getElementById('ask-input').value.trim();document.getElementById('ask-toast').textContent=v?('Sent to hermes: "'+v+'". The view updates when the next entry lands on nix.'):'Type a request first.'});
+
+// ---- A: surface switch (the user switches; the harness only badges) ----
+function surface(which){const chat=which==='chat';document.getElementById('side-chat').hidden=!chat;document.getElementById('side-view').hidden=chat;document.getElementById('tab-chat').setAttribute('aria-selected',String(chat));document.getElementById('tab-view').setAttribute('aria-selected',String(!chat));if(!chat)document.getElementById('view-badge').hidden=true}
+document.getElementById('tab-chat').onclick=()=>surface('chat');
+document.getElementById('tab-view').onclick=()=>surface('view');
+document.getElementById('chat-form').addEventListener('submit',e=>{e.preventDefault();const i=document.getElementById('chat-input');if(!i.value.trim())return;const c=document.querySelector('.chat');const a=document.createElement('div');a.className='msg you';a.textContent=i.value;c.appendChild(a);const b=document.createElement('div');b.className='msg them';b.innerHTML='Changed the view; entry 15 on <span class="mono">nix</span>.';c.appendChild(b);i.value='';document.getElementById('view-badge').hidden=false});
 
 // ---- B: source toggle ----
 const srcBtn=document.getElementById('src-toggle');
