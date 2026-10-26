@@ -15,3 +15,16 @@ What should that view be, and how should it behave? Build rough versions to reac
 - **What `/proc` is.** We own syscalls ([Guest architecture and platform matrix](05-guest-architecture-and-platform-matrix.md)), so `/proc` is whatever the runtime synthesizes. Does the view read introspection through gfs paths, or through a dedicated runtime API? Which facts are worth exposing first (processes, open files, comb grants, cache usage)?
 - **Control.** Who switches views: only the user, or can the harness bring its view to the front? Does the view get input back (buttons that send a message to the harness), or is it display-only at first?
 - **Boundary.** Whether the view runs inside the harness's wasm world or on the host side, and what that means for [Where the sandbox boundary sits](12-where-the-sandbox-boundary-sits.md).
+
+## Prototype
+
+Three variants, switchable with the floating bar: [harness-view-prototype.html on `prototype/harness-view`](https://github.com/fl0rek/gfs/blob/prototype/harness-view/.scratch/universal-explorer/prototypes/harness-view-prototype.html) (published copy: https://claude.ai/artifact/CZeWGihfm1zceZkgvQzrj2).
+
+- **A, Panels**: a Chat/View surface switch, stat tiles, process tree, `/machine` and `/proc` panels, and an input that sends a change request to the harness.
+- **B, Document and source**: the view as one monospace document with its source (the file in the comb that produced it) shown beside it.
+- **C, History rail**: the `nix` comb's history entries as the primary axis; pick an entry to preview the view as it was, roll back by appending.
+
+## Decided so far (2026-10-26)
+
+- **Medium**: HTML, rendered by the host (browser tab natively a webview). Works in both hosts.
+- **Loop**: the host renders the build output of the `nix` comb's checkout and re-renders on every history entry to that comb. Commit rules apply unchanged, so each self-edit of the view is auditable and can be rolled back.
