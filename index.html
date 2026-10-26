@@ -1,0 +1,342 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Harness View</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<!-- PROTOTYPE, throwaway. Three variants of the view the harness programs for itself, switchable via ?variant= (or #a/#b/#c) and the floating bar. All data is fake. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one surface per variant; a thin "surface switch" strip at top where the variant has one; floating prototype bar at bottom. */
+:root{
+  --bg:#f3f4f1; --panel:#ffffff; --fg:#1b1f1c; --mute:#5f6763; --line:#d6dad4;
+  --accent:#2a6f5e; --accent-ink:#ffffff; --warn:#b4731a; --crit:#a93a2f; --ok:#2f7a4f;
+  --ro:#6b5e3a; --rw:#2a6f5e; --tmp:#7b5ea3;
+  --sans:"Atkinson Hyperlegible",system-ui,sans-serif; --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#13161a; --panel:#1b1f25; --fg:#e4e7e3; --mute:#9aa39d; --line:#2c323a;
+  --accent:#5fc3a8; --accent-ink:#0f1512; --warn:#e0a24a; --crit:#e5705f; --ok:#6cc48a;
+  --ro:#c8b27a; --rw:#5fc3a8; --tmp:#b79be0; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#13161a; --panel:#1b1f25; --fg:#e4e7e3; --mute:#9aa39d; --line:#2c323a;
+  --accent:#5fc3a8; --accent-ink:#0f1512; --warn:#e0a24a; --crit:#e5705f; --ok:#6cc48a;
+  --ro:#c8b27a; --rw:#5fc3a8; --tmp:#b79be0; color-scheme:dark}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:15px;line-height:1.45}
+.wrap{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:12px 96px;max-width:960px;margin:0 auto}
+h1,h2,h3{margin:0;text-wrap:balance;line-height:1.2}
+h2{font-size:1.05rem}
+.mono,code,pre{font-family:var(--mono);font-size:.86em}
+pre{margin:0;white-space:pre;overflow-x:auto}
+.lbl{font-size:.72rem;letter-spacing:.06em;text-transform:uppercase;color:var(--mute)}
+.num{font-variant-numeric:tabular-nums}
+.pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:.72rem;font-weight:700;letter-spacing:.03em}
+.pill.ro{background:color-mix(in srgb,var(--ro) 18%,transparent);color:var(--ro)}
+.pill.rw{background:color-mix(in srgb,var(--rw) 18%,transparent);color:var(--rw)}
+.pill.tmp{background:color-mix(in srgb,var(--tmp) 18%,transparent);color:var(--tmp)}
+.pill.ok{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
+.pill.warn{background:color-mix(in srgb,var(--warn) 18%,transparent);color:var(--warn)}
+button{font:inherit;color:inherit;background:none;border:1px solid var(--line);border-radius:6px;padding:6px 10px;cursor:pointer}
+button:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:700}
+.bar{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:14px}
+.bar .tab{border:0;border-bottom:2px solid transparent;border-radius:0;padding:8px 12px;color:var(--mute)}
+.bar .tab[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--accent);font-weight:700}
+.bar .spacer{flex:1}
+.prov{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:baseline;color:var(--mute);font-size:.82rem}
+.prov b{color:var(--fg);font-weight:700}
+.variant[hidden]{display:none}
+.meter{height:6px;background:color-mix(in srgb,var(--line) 70%,transparent);border-radius:3px;overflow:hidden}
+.meter i{display:block;height:100%;background:var(--accent)}
+.meter i.warn{background:var(--warn)}
+
+/* A: panels */
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin:14px 0}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;min-width:0}
+.tile .v{font-size:1.5rem;font-weight:700;line-height:1.1;margin:2px 0 6px}
+.panels{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;min-width:0}
+.panel h2{margin-bottom:8px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:.9rem}
+.kv dt{color:var(--mute)} .kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.ptree{list-style:none;margin:0;padding:0;font-family:var(--mono);font-size:.84rem}
+.ptree ul{list-style:none;margin:0;padding-left:18px;border-left:1px dashed var(--line)}
+.ptree li{padding:2px 0;display:flex;gap:8px;flex-wrap:wrap;align-items:baseline}
+.ptree .pid{color:var(--mute);width:3.5ch;text-align:right;display:inline-block}
+.ptree .where{font-size:.7rem;color:var(--mute)}
+.ask{display:flex;gap:8px;margin-top:14px}
+.ask input{flex:1;min-width:0;font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--fg)}
+.toast{margin-top:8px;font-size:.85rem;color:var(--mute)}
+.chat{display:flex;flex-direction:column;gap:8px;margin:10px 0}
+.msg{max-width:46ch;padding:8px 12px;border-radius:12px;font-size:.92rem}
+.msg.you{align-self:flex-end;background:var(--accent);color:var(--accent-ink);border-bottom-right-radius:3px}
+.msg.them{align-self:flex-start;background:color-mix(in srgb,var(--line) 55%,transparent);border-bottom-left-radius:3px}
+.tab .pill{margin-left:4px;vertical-align:middle}
+
+/* B: document + source */
+.doc{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px;min-width:0}
+.doc pre{font-size:.8rem;line-height:1.5}
+.doc .sec{color:var(--accent);font-weight:600}
+.split{display:grid;grid-template-columns:1fr;gap:12px}
+@media (min-width:760px){.split.two{grid-template-columns:1fr 1fr}}
+.srcbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;font-size:.85rem;color:var(--mute)}
+.srcbar b{color:var(--fg)}
+.build{border-left:3px solid var(--accent);padding:6px 10px;font-size:.85rem;background:color-mix(in srgb,var(--accent) 8%,transparent);border-radius:0 6px 6px 0;margin-bottom:10px}
+
+/* C: history rail */
+.c{display:grid;grid-template-columns:1fr;gap:12px}
+@media (min-width:760px){.c{grid-template-columns:260px 1fr}}
+.rail{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px}
+@media (min-width:760px){.rail{flex-direction:column;overflow:visible}}
+.entry{flex:0 0 220px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px;text-align:left;cursor:pointer;min-width:0}
+@media (min-width:760px){.entry{flex:none}}
+.entry[aria-current="true"]{border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent)}
+.entry .h{font-family:var(--mono);font-size:.78rem;color:var(--mute)}
+.entry .m{font-weight:700;margin:2px 0}
+.entry .who{font-size:.78rem;color:var(--mute)}
+.stage{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;min-width:0}
+.stage .head{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+.stage .head .spacer{flex:1}
+.wtree{font-family:var(--mono);font-size:.82rem;line-height:1.55;white-space:pre;overflow-x:auto}
+.wtree .m{color:var(--ro)} .wtree .d{color:var(--rw)} .wtree .t{color:var(--tmp)} .wtree .p{color:var(--fg);font-weight:600} .wtree .g{color:var(--mute)}
+.stage .changed{outline:2px dashed var(--accent);outline-offset:3px;border-radius:4px}
+.note{font-size:.82rem;color:var(--mute);margin-top:8px}
+
+/* floating prototype switcher: deliberately not part of the design */
+#proto{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(14px + env(safe-area-inset-bottom,0px));display:flex;align-items:center;gap:6px;background:#111;color:#fff;border-radius:999px;padding:6px 8px;box-shadow:0 6px 20px rgba(0,0,0,.35);font-size:.85rem;z-index:50;max-width:calc(100vw - 32px)}
+#proto button{color:#fff;border-color:#444;border-radius:999px;padding:4px 10px}
+#proto .lab{padding:0 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@media (prefers-reduced-motion:no-preference){.variant{animation:fade .15s ease-out}}
+@keyframes fade{from{opacity:.4}to{opacity:1}}
+</style>
+
+<div class="wrap">
+
+<!-- ================= A: Panels ================= -->
+<section class="variant" id="va" data-name="Panels, with the surface switch" hidden>
+  <div class="bar" role="tablist" aria-label="Surface">
+    <button class="tab" role="tab" id="tab-chat" aria-selected="false">Chat</button>
+    <button class="tab" role="tab" id="tab-view" aria-selected="true">View <span class="pill ok" id="view-badge" hidden>updated</span></button>
+    <span class="spacer"></span>
+    <span class="prov"><span>rendered from <b class="mono">nix@a4f1c9</b></span><span>entry 14 · 13:41</span></span>
+  </div>
+
+  <div id="side-chat" class="panel" hidden>
+    <div class="lbl">hermes · session s-0412</div>
+    <div class="chat">
+      <div class="msg you">Add the process tree to the view, grouped by host and world.</div>
+      <div class="msg them">Done. I edited <span class="mono">view/introspect.py</span> in the <span class="mono">nix</span> comb; that landed as entry 13 and the view re-rendered.</div>
+      <div class="msg you">Colour the mounts by tier and show which combs this session is granted.</div>
+      <div class="msg them">Entry 14 on <span class="mono">nix</span>. Switch to View to see it.</div>
+    </div>
+    <form class="ask" id="chat-form"><input id="chat-input" placeholder="Message hermes…" aria-label="Message hermes"><button class="primary" type="submit">Send</button></form>
+  </div>
+  <div id="side-view">
+  <div class="tiles">
+    <div class="tile"><div class="lbl">Uptime</div><div class="v num">2h 07m</div><div class="lbl">world started 11:34</div></div>
+    <div class="tile"><div class="lbl">World memory</div><div class="v num">412 MB</div><div class="meter"><i style="width:40%"></i></div><div class="lbl">of 1 GB linear</div></div>
+    <div class="tile"><div class="lbl">Cache</div><div class="v num">1.3 GB</div><div class="meter"><i class="warn" style="width:65%"></i></div><div class="lbl">840 MB spilled to disk</div></div>
+    <div class="tile"><div class="lbl">Processes</div><div class="v num">7</div><div class="lbl">1 host · 6 in world</div></div>
+  </div>
+
+  <div class="panels">
+    <div class="panel">
+      <h2>Processes</h2>
+      <ul class="ptree">
+        <li><span class="pid">1</span> ue-runtime <span class="where">host · wasmer 6.1</span>
+          <ul>
+            <li><span class="pid">2</span> hermes <span class="where">python 3.12 · HERMES_HOME=/datacombs/hermes</span>
+              <ul>
+                <li><span class="pid">5</span> sqlite3 <span class="where">state.db, WAL</span></li>
+                <li><span class="pid">9</span> sh -c rg -n TODO <span class="where">tool call · entry 14</span>
+                  <ul><li><span class="pid">10</span> rg</li></ul></li>
+                <li><span class="pid">11</span> view-build <span class="where">nix build /datacombs/nix#view</span></li>
+              </ul></li>
+            <li><span class="pid">3</span> offload-broker <span class="where">idle · 0 jobs</span></li>
+          </ul></li>
+      </ul>
+    </div>
+
+    <div class="panel">
+      <h2>/machine</h2>
+      <dl class="kv">
+        <dt>nixpkgs</dt><dd class="mono">b7f2e0d1 (2026-10-19)</dd>
+        <dt>harness</dt><dd>hermes-agent 0.9.3 (wasix)</dd>
+        <dt>runtimes</dt><dd>python 3.12.7 · node 22.11 · sqlite 3.47</dd>
+        <dt>store paths</dt><dd class="num">1,284</dd>
+        <dt>closure</dt><dd class="num">612 MB</dd>
+        <dt>hash</dt><dd class="mono">sha256-9kQ…r3M</dd>
+      </dl>
+    </div>
+
+    <div class="panel">
+      <h2>/proc as the runtime reports it</h2>
+      <dl class="kv">
+        <dt>loadavg</dt><dd class="num">0.42 0.31 0.18</dd>
+        <dt>mounts</dt><dd>
+          <span class="pill ro">ro</span> /machine<br>
+          <span class="pill rw">rw</span> /datacombs/nix <span class="mono">@a4f1c9</span><br>
+          <span class="pill rw">rw</span> /datacombs/hermes <span class="mono">@7c22e0</span><br>
+          <span class="pill tmp">ram</span> /cache</dd>
+        <dt>grants</dt><dd>nix, hermes <span class="pill ok">this session</span></dd>
+        <dt>open fds</dt><dd class="num">38</dd>
+      </dl>
+    </div>
+  </div>
+
+  <form class="ask" id="ask-form"><input id="ask-input" placeholder="Ask the harness to change this view…" aria-label="Ask the harness to change this view"><button class="primary" type="submit">Send</button></form>
+  <div class="toast" id="ask-toast">Sent as a chat message; the next history entry on <span class="mono">nix</span> re-renders this.</div>
+  </div>
+</section>
+
+<!-- ================= B: Document and its source ================= -->
+<section class="variant" id="vb" data-name="One document, source beside it" hidden>
+  <div class="srcbar">
+    <b>introspect.html</b> <span>is the output of</span> <b class="mono">/datacombs/nix#view</b>
+    <span class="spacer"></span>
+    <button id="src-toggle" aria-pressed="false">Show source</button>
+  </div>
+  <div class="build">Built 13:41 from entry 14 (<span class="mono">a4f1c9</span>), author: hermes session s-0412, model claude-fable-5-1, principal mikolaj. Build took 1.8 s.</div>
+
+  <div class="split" id="split">
+    <div class="doc">
+<pre id="rendered"><span class="sec">UNIVERSAL EXPLORER · hermes · world up 2h07m</span>
+
+<span class="sec">machine</span>  nixpkgs b7f2e0d1   hermes-agent 0.9.3   closure 612 MB   1,284 paths
+<span class="sec">memory</span>   412 MB / 1 GB linear  ▇▇▇▇▇▇▇▇░░░░░░░░░░░░  40%
+<span class="sec">cache</span>    1.3 GB  (840 MB spilled)  ▇▇▇▇▇▇▇▇▇▇▇▇▇░░░░░░░  65%
+<span class="sec">load</span>     0.42 0.31 0.18
+
+<span class="sec">mounts</span>
+  ro   /machine
+  rw   /datacombs/nix      @a4f1c9   this view
+  rw   /datacombs/hermes   @7c22e0   HERMES_HOME
+  ram  /cache
+
+<span class="sec">processes</span>
+  1  ue-runtime              host, wasmer 6.1
+  ├─ 2  hermes               python 3.12
+  │  ├─ 5  sqlite3           state.db WAL
+  │  ├─ 9  sh -c rg -n TODO  tool call, entry 14
+  │  │  └─ 10 rg
+  │  └─ 11 view-build        nix build /datacombs/nix#view
+  └─ 3  offload-broker       idle</pre>
+    </div>
+    <div class="doc" id="source" hidden>
+<pre># /datacombs/nix/view/introspect.py   (the harness wrote this)
+import ue                                  # runtime API
+
+def render():
+    m   = ue.machine()                     # /machine provenance
+    p   = ue.proc()                        # synthesized /proc
+    out = [f"UNIVERSAL EXPLORER · {p.harness} · world up {p.uptime}"]
+    out += section("machine", m.summary())
+    out += bar("memory", p.mem.used, p.mem.limit)
+    out += bar("cache",  p.cache.used, p.cache.limit)
+    out += section("mounts", p.mounts)
+    out += tree("processes", p.processes)
+    return html(out)
+
+# flake.nix:  outputs.view = ue.lib.htmlView ./view/introspect.py
+# every history entry on this comb triggers: nix build .#view → re-render</pre>
+    </div>
+  </div>
+  <p class="note">Everything the view shows comes from one file the harness owns. Reading the source is how you audit what the view claims.</p>
+</section>
+
+<!-- ================= C: History rail ================= -->
+<section class="variant" id="vc" data-name="History rail, the view at each entry" hidden>
+  <div class="c">
+    <div>
+      <div class="lbl" style="margin-bottom:6px">nix comb · history</div>
+      <div class="rail" id="rail" role="listbox" aria-label="History entries"></div>
+    </div>
+    <div class="stage">
+      <div class="head">
+        <span class="lbl">View at</span> <b class="mono" id="st-hash"></b>
+        <span class="spacer"></span>
+        <button id="btn-live" class="primary">Show live</button>
+        <button id="btn-roll">Roll back to here</button>
+      </div>
+      <div class="wtree" id="wtree"></div>
+      <p class="note" id="st-note"></p>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<div id="proto" role="group" aria-label="Prototype variant switcher">
+  <button id="prev" aria-label="Previous variant">←</button>
+  <span class="lab" id="lab"></span>
+  <button id="next" aria-label="Next variant">→</button>
+</div>
+
+<script>
+// ---- variant switcher (prototype chrome) ----
+const keys=['a','b','c'];
+function current(){const q=new URLSearchParams(location.search).get('variant');const h=location.hash.replace('#','');const k=(q||h||'a').toLowerCase();return keys.includes(k)?k:'a'}
+function show(k){keys.forEach(x=>{document.getElementById('v'+x).hidden=(x!==k)});const el=document.getElementById('v'+k);document.getElementById('lab').textContent=k.toUpperCase()+' ('+el.dataset.name+')';try{history.replaceState(null,'','#'+k)}catch(e){}}
+function cycle(d){const i=keys.indexOf(current());show(keys[(i+d+keys.length)%keys.length])}
+document.getElementById('prev').onclick=()=>cycle(-1);document.getElementById('next').onclick=()=>cycle(1);
+addEventListener('keydown',e=>{const t=e.target;if(t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.isContentEditable))return;if(e.key==='ArrowLeft')cycle(-1);if(e.key==='ArrowRight')cycle(1)});
+addEventListener('hashchange',()=>show(current()));
+show(current());
+
+// ---- A: ask the harness (stub) ----
+document.getElementById('ask-form').addEventListener('submit',e=>{e.preventDefault();const v=document.getElementById('ask-input').value.trim();document.getElementById('ask-toast').textContent=v?('Sent to hermes: "'+v+'". The view updates when the next entry lands on nix.'):'Type a request first.'});
+
+// ---- A: surface switch (the user switches; the harness only badges) ----
+function surface(which){const chat=which==='chat';document.getElementById('side-chat').hidden=!chat;document.getElementById('side-view').hidden=chat;document.getElementById('tab-chat').setAttribute('aria-selected',String(chat));document.getElementById('tab-view').setAttribute('aria-selected',String(!chat));if(!chat)document.getElementById('view-badge').hidden=true}
+document.getElementById('tab-chat').onclick=()=>surface('chat');
+document.getElementById('tab-view').onclick=()=>surface('view');
+document.getElementById('chat-form').addEventListener('submit',e=>{e.preventDefault();const i=document.getElementById('chat-input');if(!i.value.trim())return;const c=document.querySelector('.chat');const a=document.createElement('div');a.className='msg you';a.textContent=i.value;c.appendChild(a);const b=document.createElement('div');b.className='msg them';b.innerHTML='Changed the view; entry 15 on <span class="mono">nix</span>.';c.appendChild(b);i.value='';document.getElementById('view-badge').hidden=false});
+
+// ---- B: source toggle ----
+const srcBtn=document.getElementById('src-toggle');
+srcBtn.onclick=()=>{const s=document.getElementById('source');s.hidden=!s.hidden;document.getElementById('split').classList.toggle('two',!s.hidden);srcBtn.setAttribute('aria-pressed',String(!s.hidden));srcBtn.textContent=s.hidden?'Show source':'Hide source'};
+
+// ---- C: history rail ----
+const entries=[
+ {h:'0e91b2',n:11,t:'12:02',m:'first view: machine provenance',who:'hermes s-0412 · claude-fable-5-1 · mikolaj',tool:'write_file view/introspect.py',has:['machine']},
+ {h:'3d7a40',n:12,t:'12:40',m:'add /proc: memory, cache, mounts',who:'hermes s-0412 · claude-fable-5-1 · mikolaj',tool:'edit_file view/introspect.py',has:['machine','proc']},
+ {h:'c05e77',n:13,t:'13:20',m:'process tree, grouped by host/world',who:'hermes s-0412 · claude-fable-5-1 · mikolaj',tool:'edit_file view/introspect.py',has:['machine','proc','tree']},
+ {h:'a4f1c9',n:14,t:'13:41',m:'colour mounts by tier; show grants',who:'mikolaj (external edit)',tool:'external · $EDITOR',has:['machine','proc','tree','grants']},
+];
+let sel=entries.length-1;
+function tree(e){
+ const has=x=>e.has.includes(x);
+ const L=[];
+ L.push('<span class="g">/</span>');
+ L.push('├─ <span class="m">machine</span>  <span class="g">ro · nixpkgs b7f2e0d1 · hermes-agent 0.9.3 · 612 MB</span>');
+ if(has('proc')){
+  L.push('├─ <span class="d">datacombs</span>');
+  L.push('│  ├─ <span class="d">nix</span>     <span class="g">@'+e.h+(has('grants')?' · granted':'')+'   ← this view</span>');
+  L.push('│  └─ <span class="d">hermes</span>  <span class="g">@7c22e0'+(has('grants')?' · granted':'')+'   HERMES_HOME</span>');
+  L.push('├─ <span class="t">cache</span>    <span class="g">ram · 1.3 GB, 840 MB spilled</span>');
+  L.push('└─ <span class="g">proc</span>     <span class="g">mem 412 MB / 1 GB · load 0.42</span>');
+ } else { L.push('└─ <span class="g">… (/proc not yet rendered at this entry)</span>'); }
+ if(has('tree')){
+  L.push('');
+  L.push('<span class="p">1 ue-runtime</span>  <span class="g">host</span>');
+  L.push('├─ <span class="p">2 hermes</span>  <span class="g">python 3.12</span>');
+  L.push('│  ├─ 5 sqlite3  <span class="g">state.db</span>');
+  L.push('│  ├─ 9 sh -c rg -n TODO  <span class="g">tool call</span>');
+  L.push('│  │  └─ 10 rg');
+  L.push('│  └─ 11 view-build  <span class="g">nix build .#view</span>');
+  L.push('└─ <span class="p">3 offload-broker</span>  <span class="g">idle</span>');
+ }
+ return L.join('\n');
+}
+function paint(){
+ const rail=document.getElementById('rail');rail.innerHTML='';
+ entries.slice().reverse().forEach((e,ri)=>{const i=entries.length-1-ri;const b=document.createElement('button');b.className='entry';b.setAttribute('role','option');b.setAttribute('aria-current',String(i===sel));b.innerHTML='<div class="h">'+e.h+' · entry '+e.n+' · '+e.t+'</div><div class="m">'+e.m+'</div><div class="who">'+e.who+'<br>'+e.tool+'</div>';b.onclick=()=>{sel=i;paint()};rail.appendChild(b)});
+ const e=entries[sel];
+ document.getElementById('st-hash').textContent='nix@'+e.h+(sel===entries.length-1?' (live)':'');
+ document.getElementById('wtree').innerHTML=tree(e);
+ document.getElementById('btn-live').hidden=(sel===entries.length-1);
+ document.getElementById('btn-roll').hidden=(sel===entries.length-1);
+ document.getElementById('st-note').textContent=sel===entries.length-1?'This is what the harness sees now. Pick an earlier entry to preview the view as it was.':'Preview of nix@'+e.h+'. Rolling back appends a new entry; nothing is rewritten.';
+}
+document.getElementById('btn-live').onclick=()=>{sel=entries.length-1;paint()};
+document.getElementById('btn-roll').onclick=()=>{const e=entries[sel];entries.push({h:'f1'+e.h.slice(2),n:entries[entries.length-1].n+1,t:'now',m:'rollback to '+e.h,who:'mikolaj · via view',tool:'rollback',has:e.has});sel=entries.length-1;paint()};
+paint();
+</script>
