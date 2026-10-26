@@ -1,7 +1,7 @@
 # The view the harness programs for itself
 
 Type: prototype
-Status: claimed
+Status: resolved
 Blocked by: 05
 
 ## Question
@@ -28,3 +28,14 @@ Three variants, switchable with the floating bar: [harness-view-prototype.html o
 
 - **Medium**: HTML, rendered by the host (browser tab natively a webview). Works in both hosts.
 - **Loop**: the host renders the build output of the `nix` comb's checkout and re-renders on every history entry to that comb. Commit rules apply unchanged, so each self-edit of the view is auditable and can be rolled back.
+
+## Answer
+
+Variant **A (Panels)** wins. B is out: the view is not pretending to be a terminal.
+
+- **Medium**: HTML, rendered by the host (browser tab natively a webview). No TUI.
+- **Where it is programmed**: the `nix` comb (`/datacombs/nix`). The view is a build output of that comb's checkout.
+- **Loop**: every history entry on the `nix` comb re-renders the view. Commit rules are unchanged, so each self-edit is a history entry with author, harness, model and principal, and can be rolled back like any other.
+- **Control**: the user switches surfaces (Chat and View). The harness only controls what is displayed inside the view; it cannot bring the view to the front. The view can send input back to the harness as a chat message (the input in A).
+- **First content**: an introspection dashboard: `/machine` provenance, what `/proc` reports, the process tree, cache usage, mounts and grants.
+- **Open, ticketed**: what the runtime exposes for introspection and through which channel, see [What the runtime exposes to the view](18-what-the-runtime-exposes-to-the-view.md). Where the view's build runs relative to the sandbox stays with [Where the sandbox boundary sits](12-where-the-sandbox-boundary-sits.md).

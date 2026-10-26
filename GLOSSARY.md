@@ -13,6 +13,10 @@ _Avoid_: agent, app
 The filesystem Universal Explorer presents to a harness, composing machine, datacombs and cache into one root. The name is recursive ("gfs filesystem").
 _Avoid_: VFS, root view, the filesystem
 
+**view**:
+The surface beside the harness's chat that the user switches to; its contents are HTML built from a comb and re-rendered on every history entry, so the harness programs what is inside but never who is looking.
+_Avoid_: dashboard, panel, UI, TUI
+
 **offload**:
 Running work natively on the host, outside the harness's wasm world, on files taken from gfs, with the results returned.
 _Avoid_: escape hatch, passthrough
