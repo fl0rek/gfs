@@ -153,6 +153,13 @@ impl Datacombs {
         Ok(())
     }
 
+    /// Replace a comb's working tree wholesale (e.g. with a tree checked out from git).
+    pub fn set_working(&mut self, comb: &str, flat: Flat) -> Result<()> {
+        self.head(comb)?;
+        self.working.insert(comb.to_string(), flat);
+        Ok(())
+    }
+
     fn wt(&self, comb: &str) -> Result<&Flat> {
         self.working.get(comb).ok_or_else(|| GfsError::NoComb(comb.to_string()))
     }
@@ -640,6 +647,7 @@ fn generate_message(kind: &EntryKind, s: &ChangeSummary) -> String {
         EntryKind::External => format!("external: {what}"),
         EntryKind::Rollback { to_entry } => format!("rollback to {}: {what}", &to_entry[..8.min(to_entry.len())]),
         EntryKind::Switch { at_entry, system, .. } => format!("switch to @{}: {system}", &at_entry[..8.min(at_entry.len())]),
+        EntryKind::Pull { remote, commit } => format!("pull {remote} @{}: {what}", &commit[..8.min(commit.len())]),
     }
 }
 

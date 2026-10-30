@@ -19,7 +19,9 @@ export interface HistoryEntry {
   comb: string;
   parent: string | null;
   tree: string;
-  kind: "genesis" | "tool_call" | "turn" | "external" | "rollback" | "switch";
+  kind: "genesis" | "tool_call" | "turn" | "external" | "rollback" | "switch" | "pull";
+  remote?: string;
+  commit?: string;
   at_entry?: string;
   previous?: string | null;
   system?: string;
@@ -76,7 +78,13 @@ export type Request =
   | { id: number; method: "debugTool"; name: string; params: unknown }
   | { id: number; method: "saveFile"; comb: string; path: string; content: string } // you, editing outside pi → external entry
   | { id: number; method: "freeStatus" } // the free-tier router's view of its models
-  | { id: number; method: "machine" }; // snapshot of /machine for the view, plus where the view comes from
+  | { id: number; method: "machine" } // snapshot of /machine for the view, plus where the view comes from
+  | { id: number; method: "remotesConfigure"; remotes: import("./remotes").RemoteConfig[] } // the page owns remote configs (tokens included)
+  | { id: number; method: "remoteSync"; comb: string }
+  | { id: number; method: "remoteResolve"; comb: string; choice: "mine" | "theirs" }
+  | { id: number; method: "loginDeviceStart"; host: string; clientId: string; scope: string }
+  | { id: number; method: "loginDevicePoll"; host: string; clientId: string; deviceCode: string }
+  | { id: number; method: "loginToken"; tokenUrl: string; form: Record<string, string> };
 
 /** Page → worker, outside the RPC: a response event from the egress bridge. */
 export interface BridgeInbound {
@@ -114,6 +122,8 @@ export type Notification =
   | { type: "status"; text: string; busy?: boolean }
   | { type: "error"; message: string }
   | { type: "bridge"; reqId: number; req: import("./egress").BridgeRequest | null } // null = abort
-  | { type: "system"; entry: string; name: string; reason: string }; // the running system switched
+  | { type: "system"; entry: string; name: string; reason: string } // the running system switched
+  | { type: "remotes"; status: import("./remotes").RemoteStatus[] } // git sync state changed
+  | { type: "remoteAuth"; comb: string; patch: Partial<import("./remotes").RemoteConfig> }; // a refreshed token to keep
 
 export type Reply = { id: number; ok: true; result: unknown } | { id: number; ok: false; error: string };

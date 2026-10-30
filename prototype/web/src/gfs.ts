@@ -17,12 +17,19 @@ export type EntryKind =
   | { kind: "tool_call"; tool_call_id: string; turn_id: string; tool_name: string; args_hash: string | null }
   | { kind: "turn"; turn_id: string }
   | { kind: "external" }
-  | { kind: "switch"; at_entry: string; previous: string | null; system: string };
+  | { kind: "switch"; at_entry: string; previous: string | null; system: string }
+  | { kind: "pull"; remote: string; commit: string };
+
+/** Mode overlay: what gfs can't hold but a git tree does (`path → "100755" | "120000" | "160000 <oid>"`). */
+export type GitOverlay = Record<string, string>;
 
 export class Datacombs {
   private gfs!: Gfs;
   private objectsDir: FileSystemDirectoryHandle | null = null;
   private refsDir: FileSystemDirectoryHandle | null = null;
+  private metaDir: FileSystemDirectoryHandle | null = null;
+  private memoryMeta = new Map<string, string>();
+  private commitListeners = new Set<(comb: string, id: string) => void>();
   persistence: "opfs" | "memory" = "memory";
   private flushing: Promise<void> = Promise.resolve();
 
@@ -40,6 +47,7 @@ export class Datacombs {
       const dir = await root.getDirectoryHandle(ROOT_DIR, { create: true });
       this.objectsDir = await dir.getDirectoryHandle("objects", { create: true });
       this.refsDir = await dir.getDirectoryHandle("refs", { create: true });
+      this.metaDir = await dir.getDirectoryHandle("meta", { create: true });
       this.persistence = "opfs";
     } catch (e) {
       console.warn("OPFS unavailable, staying in memory:", e);
@@ -84,6 +92,42 @@ export class Datacombs {
     if (this.objectsDir && this.refsDir) {
       const root = await navigator.storage.getDirectory();
       await root.removeEntry(ROOT_DIR, { recursive: true });
+    }
+  }
+
+  // ----- meta: small documents the node keeps beside the objects (e.g. git sync state) -----
+  async readMeta(name: string): Promise<string | null> {
+    if (!this.metaDir) return this.memoryMeta.get(name) ?? null;
+    try {
+      const fh = await this.metaDir.getFileHandle(encodeURIComponent(name));
+      return await (await fh.getFile()).text();
+    } catch {
+      return null;
+    }
+  }
+  async writeMeta(name: string, text: string) {
+    if (!this.metaDir) {
+      this.memoryMeta.set(name, text);
+      return;
+    }
+    const dir = this.metaDir;
+    this.flushing = this.flushing.then(() => writeFile(dir, encodeURIComponent(name), enc.encode(text)));
+    await this.flushing;
+  }
+
+  /** Called after every new history entry, whoever made it. */
+  onCommit(fn: (comb: string, id: string) => void) {
+    this.commitListeners.add(fn);
+    return () => this.commitListeners.delete(fn);
+  }
+  private committed(comb: string, id: string | null) {
+    if (!id) return;
+    for (const l of this.commitListeners) {
+      try {
+        l(comb, id);
+      } catch (e) {
+        console.error(e);
+      }
     }
   }
 
@@ -148,6 +192,7 @@ export class Datacombs {
   async commit(comb: string, kind: EntryKind, author: Author): Promise<string | null> {
     const id = this.gfs.commit(comb, kind, author, Date.now()) ?? null;
     await this.flush();
+    this.committed(comb, id);
     return id;
   }
   log(comb: string): HistoryEntry[] {
@@ -177,10 +222,48 @@ export class Datacombs {
   async rollback(comb: string, toEntry: string, author: Author): Promise<string> {
     const id = this.gfs.rollback(comb, toEntry, author, Date.now());
     await this.flush();
+    this.committed(comb, id);
     return id;
   }
   verify(comb: string): VerifyReport {
     return this.gfs.verify(comb) as VerifyReport;
+  }
+  diffEntries(a: string, b: string): FileDiff[] {
+    return this.gfs.diffEntries(a, b) as FileDiff[];
+  }
+
+  // ----- git (see gfs-core/src/git.rs) -----
+  gitEncodeEntry(entryId: string, parents: string[], committer: { name: string; email: string }, overlay: GitOverlay): { commit: string; tree: string } {
+    return this.gfs.gitEncodeEntry(entryId, parents, committer.name, committer.email, overlay);
+  }
+  gitEntryTree(entryId: string, overlay: GitOverlay): string {
+    return this.gfs.gitEntryTree(entryId, overlay);
+  }
+  gitPack(commits: string[], haveTrees: string[]): Uint8Array {
+    return this.gfs.gitPack(commits, haveTrees);
+  }
+  /** Blobs land in the store (persisted on the next flush); trees and commits stay in memory. */
+  gitIndexPack(pack: Uint8Array): { objects: number; commits: string[] } {
+    return this.gfs.gitIndexPack(pack);
+  }
+  gitPutObject(kind: "blob" | "tree" | "commit", body: Uint8Array): string {
+    return this.gfs.gitPutObject(kind, body);
+  }
+  gitPutListing(rows: [string, string, string][]): string {
+    return this.gfs.gitPutListing(rows);
+  }
+  gitHas(oid: string): boolean {
+    return this.gfs.gitHas(oid);
+  }
+  gitCommitInfo(oid: string): { tree: string; parents: string[]; author: string; committer: string; message: string } {
+    return this.gfs.gitCommitInfo(oid);
+  }
+  /** Replace the comb's working tree with a git commit's (or tree's) tree; returns the overlay. */
+  gitCheckout(comb: string, oid: string, isTree: boolean): GitOverlay {
+    return this.gfs.gitCheckout(comb, oid, isTree);
+  }
+  gitObjectCount(): number {
+    return this.gfs.gitObjectCount();
   }
 }
 

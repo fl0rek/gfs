@@ -3,10 +3,13 @@
 //! All results are JSON-serializable JS values; errors are thrown as strings.
 
 pub mod combs;
+pub mod git;
 pub mod model;
 pub mod store;
 
 use combs::{Datacombs, GfsError};
+use git::{hex_oid, parse_oid, parse_overlay, GitCache, ObjType};
+use std::collections::BTreeMap;
 use model::{Author, EntryKind};
 use wasm_bindgen::prelude::*;
 
@@ -36,13 +39,27 @@ mod serde_wasm_bindgen_lite {
 #[wasm_bindgen]
 pub struct Gfs {
     inner: Datacombs,
+    /// Git objects derived from (or fetched into) the store; in memory only, rebuilt on demand.
+    git: GitCache,
+}
+
+fn overlay_from(v: JsValue) -> JsResult<git::Overlay> {
+    if v.is_undefined() || v.is_null() {
+        return Ok(git::Overlay::new());
+    }
+    let m: BTreeMap<String, String> = serde_wasm_bindgen_lite::from_value(v)?;
+    parse_overlay(&m).map_err(js)
+}
+
+fn oids(v: &[String]) -> JsResult<Vec<git::Oid>> {
+    v.iter().map(|s| parse_oid(s).map_err(js)).collect()
 }
 
 #[wasm_bindgen]
 impl Gfs {
     #[wasm_bindgen(constructor)]
     pub fn new(node: &str) -> Gfs {
-        Gfs { inner: Datacombs::new(node) }
+        Gfs { inner: Datacombs::new(node), git: GitCache::default() }
     }
 
     // ----- persistence (host drives it) -----
@@ -238,6 +255,102 @@ impl Gfs {
     /// `{ok, entries, objects_checked, problems: [..]}`
     pub fn verify(&self, comb: &str) -> JsResult<JsValue> {
         to_js(&self.inner.verify(comb).map_err(js)?)
+    }
+}
+
+// ----- git (see git.rs) -----
+
+#[wasm_bindgen]
+impl Gfs {
+    /// Encode a history entry as a git commit. `overlay` is `{path: "100755" | "120000" | "160000 <oid>"}`.
+    /// Returns `{commit, tree}`.
+    #[wasm_bindgen(js_name = gitEncodeEntry)]
+    pub fn git_encode_entry(
+        &mut self,
+        entry_id: &str,
+        parents: Vec<String>,
+        committer_name: &str,
+        committer_email: &str,
+        overlay: JsValue,
+    ) -> JsResult<JsValue> {
+        let overlay = overlay_from(overlay)?;
+        let parents = oids(&parents)?;
+        let e = self.inner.git_encode_entry(&mut self.git, entry_id, &parents, (committer_name, committer_email), &overlay).map_err(js)?;
+        to_js(&e)
+    }
+
+    /// The git tree id of an entry's tree.
+    #[wasm_bindgen(js_name = gitEntryTree)]
+    pub fn git_entry_tree(&mut self, entry_id: &str, overlay: JsValue) -> JsResult<String> {
+        let overlay = overlay_from(overlay)?;
+        self.inner.git_encode_entry_tree(&mut self.git, entry_id, &overlay).map_err(js)
+    }
+
+    /// A packfile with `commits` and every object they reach that `have_trees` don't.
+    #[wasm_bindgen(js_name = gitPack)]
+    pub fn git_pack(&self, commits: Vec<String>, have_trees: Vec<String>) -> JsResult<Vec<u8>> {
+        self.git.build_pack(&self.inner.store, &oids(&commits)?, &oids(&have_trees)?).map_err(js)
+    }
+
+    /// Read a packfile: blobs land in the gfs store (and are persisted with it), trees and commits stay in memory.
+    /// Returns `{objects, commits: [...]}`.
+    #[wasm_bindgen(js_name = gitIndexPack)]
+    pub fn git_index_pack(&mut self, pack: &[u8]) -> JsResult<JsValue> {
+        let objs = self.git.index_pack(&mut self.inner.store, pack).map_err(js)?;
+        let commits: Vec<String> = objs.iter().filter(|(t, _)| *t == ObjType::Commit).map(|(_, o)| hex_oid(o)).collect();
+        to_js(&serde_json::json!({"objects": objs.len(), "commits": commits}))
+    }
+
+    /// Add one object (`kind` = blob | tree | commit). Returns its git id.
+    #[wasm_bindgen(js_name = gitPutObject)]
+    pub fn git_put_object(&mut self, kind: &str, body: &[u8]) -> JsResult<String> {
+        let t = match kind {
+            "blob" => ObjType::Blob,
+            "tree" => ObjType::Tree,
+            "commit" => ObjType::Commit,
+            k => return Err(js(format!("unknown git object kind {k}"))),
+        };
+        Ok(hex_oid(&self.git.put_object(&mut self.inner.store, t, body.to_vec())))
+    }
+
+    /// Build git trees from a flat listing `[[path, mode, oid], ...]` (blobs and gitlinks). Returns the root tree id.
+    #[wasm_bindgen(js_name = gitPutListing)]
+    pub fn git_put_listing(&mut self, listing: JsValue) -> JsResult<String> {
+        let rows: Vec<(String, String, String)> = serde_wasm_bindgen_lite::from_value(listing)?;
+        let mut parsed = Vec::with_capacity(rows.len());
+        for (p, m, o) in rows {
+            parsed.push((p, m, parse_oid(&o).map_err(js)?));
+        }
+        Ok(hex_oid(&self.git.put_listing(&parsed)))
+    }
+
+    #[wasm_bindgen(js_name = gitHas)]
+    pub fn git_has(&self, oid: &str) -> bool {
+        parse_oid(oid).map(|o| self.git.has(&o)).unwrap_or(false)
+    }
+
+    /// `{tree, parents, author, committer, message}`
+    #[wasm_bindgen(js_name = gitCommitInfo)]
+    pub fn git_commit_info(&self, oid: &str) -> JsResult<JsValue> {
+        to_js(&self.git.commit_info(&self.inner.store, &parse_oid(oid).map_err(js)?).map_err(js)?)
+    }
+
+    /// Replace a comb's working tree with a git commit's (or tree's, `is_tree`) tree. Returns the overlay.
+    #[wasm_bindgen(js_name = gitCheckout)]
+    pub fn git_checkout(&mut self, comb: &str, oid: &str, is_tree: bool) -> JsResult<JsValue> {
+        let o = parse_oid(oid).map_err(js)?;
+        let overlay = if is_tree {
+            self.inner.git_checkout_tree(&self.git, comb, &o)
+        } else {
+            self.inner.git_checkout(&self.git, comb, &o)
+        }
+        .map_err(js)?;
+        to_js(&git::overlay_to_strings(&overlay))
+    }
+
+    #[wasm_bindgen(js_name = gitObjectCount)]
+    pub fn git_object_count(&self) -> usize {
+        self.git.len()
     }
 }
 

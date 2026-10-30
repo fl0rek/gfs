@@ -30,6 +30,7 @@ export interface MachineSources {
   processes: () => ProcessRecord[];
   runtimeHeap: () => Promise<number | null>;
   sdkVersion: () => string;
+  git: () => unknown;
   startedAt: number;
 }
 
@@ -49,6 +50,7 @@ export function machineEntries(src: MachineSources): Record<string, () => Promis
         "  agent       pi: model, turns, tool calls, token usage and cost; the free-tier router",
         "  storage     combs (head, files, bytes), object count, OPFS usage/quota",
         "  egress      how HTTP leaves the page",
+        "  git         combs backed by git remotes: url, branch, sync state, last events",
         "  mounts      the root the harness sees",
         "  uptime      seconds since the worker started",
         "",
@@ -83,6 +85,7 @@ export function machineEntries(src: MachineSources): Record<string, () => Promis
     agent: () => j(src.agent()),
     storage: async () => j({ combs: src.combs(), objects: src.objectCount(), opfs: await src.storageEstimate() }),
     egress: () => src.egress() + "\n",
+    git: () => j(src.git()),
     mounts: () => ["/datacombs\tdatacombs\trw", "/nix\tcomb nix\trw (commit = switch, atomic)", "/machine\tmachine\tro (generated)"].join("\n") + "\n",
     uptime: () => `${Math.round((Date.now() - src.startedAt) / 1000)}\n`,
   };

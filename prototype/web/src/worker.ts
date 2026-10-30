@@ -26,6 +26,8 @@ import { createMockProvider, MOCK_MODEL_ID, MOCK_PROVIDER_ID } from "./mock-mode
 import { CWD, WORKSPACE, NIX_COMB, resolvePath } from "./paths";
 import type { Author, BridgeInbound, EntryDetail, InitInfo, ModelConfig, Notification, Reply, Request } from "./protocol";
 import { installBridge, onBridgeEvent, setBridgeAvailable, smartFetch, egressMode } from "./egress";
+import { Remotes } from "./remotes";
+import { deviceStart, devicePoll, tokenRequest } from "./login";
 
 const NODE = "browser-node";
 const SESSION_COMB = "session";
@@ -125,37 +127,43 @@ async function init(shellParam?: string, trace?: boolean): Promise<InitInfo> {
     shell = new WasixShell(dc, { kind: "registry", name: BASH_PACKAGE }, status, hostfs);
   } else {
     // Default: whatever /nix says. The comb is seeded from the system this build deployed.
-    const deployed = await loadDeployedSystem(shellOrigin);
-    installRegistryShim(new URL("packages/", shellOrigin), { packages: Object.fromEntries(deployed.manifest.packages.map((p) => [p.name, p.sha256])), registry: deployed.registry });
-    if (!dc.hasComb(NIX_COMB)) {
-      await dc.createComb(NIX_COMB, { session: sessionId, harness: "system", model: "", principal: "user" });
-      dc.writeFile(NIX_COMB, "flake.nix", deployed.flake);
-      dc.writeFile(NIX_COMB, "machine.json", JSON.stringify(deployed.manifest, null, 2) + "\n");
-      dc.writeFile(
-        NIX_COMB,
-        "README.md",
-        [
-          "# /nix — the running system",
-          "",
-          "This comb holds the flake of the system this session runs on.",
-          "",
-          "- `machine.json` is the built system: the packages the shell sandbox loads, each pinned by sha256. Change it and commit (any tool call that edits it does) and the shell is rebuilt from the new manifest: that is the switch. A package whose bytes don't match its hash is refused and the old system keeps running.",
-          "- `flake.nix` is the source of that system. The browser cannot run `nix build`; CI (or your machine) builds the flake and publishes the result, which then lands here as a new `machine.json`.",
-          "- `view/index.html` is the view: the page shown when the user switches from the console to View. It is rendered in a sandbox with `window.ue` (a snapshot of /machine) and re-rendered on every history entry of this comb, so editing it is how you change what the user sees there.",
-          "",
-          "Every switch is a history entry of this comb, so the timeline shows which system was running when.",
-          "",
-        ].join("\n"),
-      );
-      await dc.commit(NIX_COMB, { kind: "external" }, { session: sessionId, harness: "system", model: "", principal: "user" });
+    const deployed = await loadDeployedSystem(shellOrigin).catch((e) => {
+      // A build without the Nix-built system (e.g. the packages could not be fetched): no shell, everything else works.
+      shell = new UnavailableShell(`this build has no deployed system (${e?.message ?? e})`);
+      return null;
+    });
+    if (deployed) {
+      installRegistryShim(new URL("packages/", shellOrigin), { packages: Object.fromEntries(deployed.manifest.packages.map((p) => [p.name, p.sha256])), registry: deployed.registry });
+      if (!dc.hasComb(NIX_COMB)) {
+        await dc.createComb(NIX_COMB, { session: sessionId, harness: "system", model: "", principal: "user" });
+        dc.writeFile(NIX_COMB, "flake.nix", deployed.flake);
+        dc.writeFile(NIX_COMB, "machine.json", JSON.stringify(deployed.manifest, null, 2) + "\n");
+        dc.writeFile(
+          NIX_COMB,
+          "README.md",
+          [
+            "# /nix — the running system",
+            "",
+            "This comb holds the flake of the system this session runs on.",
+            "",
+            "- `machine.json` is the built system: the packages the shell sandbox loads, each pinned by sha256. Change it and commit (any tool call that edits it does) and the shell is rebuilt from the new manifest: that is the switch. A package whose bytes don't match its hash is refused and the old system keeps running.",
+            "- `flake.nix` is the source of that system. The browser cannot run `nix build`; CI (or your machine) builds the flake and publishes the result, which then lands here as a new `machine.json`.",
+            "- `view/index.html` is the view: the page shown when the user switches from the console to View. It is rendered in a sandbox with `window.ue` (a snapshot of /machine) and re-rendered on every history entry of this comb, so editing it is how you change what the user sees there.",
+            "",
+            "Every switch is a history entry of this comb, so the timeline shows which system was running when.",
+            "",
+          ].join("\n"),
+        );
+        await dc.commit(NIX_COMB, { kind: "external" }, { session: sessionId, harness: "system", model: "", principal: "user" });
+      }
+      // The view: a page the harness programs for itself, kept in /nix. Seeded once; after that it is whatever the comb says.
+      if (!dc.listAll(NIX_COMB).some(([p]) => p === VIEW_PATH)) {
+        dc.writeFile(NIX_COMB, VIEW_PATH, seedView);
+        await dc.commit(NIX_COMB, { kind: "external" }, { session: sessionId, harness: "system", model: "", principal: "user" });
+      }
+      // Don't block the page on 18 MB of wasm: the system comes up after init returns.
+      pendingBoot = true;
     }
-    // The view: a page the harness programs for itself, kept in /nix. Seeded once; after that it is whatever the comb says.
-    if (!dc.listAll(NIX_COMB).some(([p]) => p === VIEW_PATH)) {
-      dc.writeFile(NIX_COMB, VIEW_PATH, seedView);
-      await dc.commit(NIX_COMB, { kind: "external" }, { session: sessionId, harness: "system", model: "", principal: "user" });
-    }
-    // Don't block the page on 18 MB of wasm: the system comes up after init returns.
-    pendingBoot = true;
   }
 
   buildAgent(restoreTranscript());
@@ -305,6 +313,7 @@ function systemPrompt() {
     `/nix is the comb holding the running system's flake: machine.json lists the packages the shell sandbox runs, pinned by sha256; editing it (any tool call that changes it) switches the system; flake.nix is its source but cannot be built here.`,
     `/nix/view/index.html is the view: a page the user can switch to instead of this console. You own it: edit it (any tool call that changes it commits it) and it re-renders on the next history entry. It runs in a sandbox with window.ue = { machine: <every /machine entry as text>, view: { entry, path }, prompt(text) }; call ue.onUpdate(fn) to redraw when a fresh snapshot arrives. No network, no access to the page around it.`,
     `/machine is read-only and describes this node (read /machine for the index: session, system, shell, processes, runtime, agent, storage, egress, mounts, uptime).`,
+    `A comb may be backed by a git remote (see /machine/git): each of its history entries is pushed there as one git commit, automatically. Nothing to do on your side; there is no git CLI.`,
     `bash runs in a WASIX sandbox with the same root mounted live (/datacombs/<comb>, /datacombs/<comb>@<entry>, /nix, /machine), cwd ${CWD}. The Nix-built system has bash, coreutils, grep, sed, awk, find, xargs, diff; no git. It has no network; use the fetch tool for HTTP. Prefer the read tool over cat.`,
     "</environment>",
     "",
@@ -372,7 +381,20 @@ const machineSources: MachineSources = {
   processes: () => processLog,
   runtimeHeap: runtimeHeapBytes,
   sdkVersion: () => "@wasmer/sdk 0.19.1",
+  git: () => remotes.list().map(({ pushed, events, ...s }) => ({ ...s, entriesOnRemote: Object.keys(pushed).length, events: events.slice(-8) })),
 };
+
+/** Combs backed by git remotes: every entry is pushed shortly after it lands. */
+const remotes = new Remotes({
+  dc,
+  fetch: smartFetch,
+  node: NODE,
+  author: () => ({ session: sessionId, harness: "git", model: "", principal: "user" }),
+  commit: (comb, kind, a) => commitComb(comb, kind, a, "pull from git"),
+  busy: () => !!agent?.state.isStreaming,
+  publish: (status) => post({ type: "remotes", status }),
+  onAuth: (comb, patch) => post({ type: "remoteAuth", comb, patch }),
+});
 
 /** gfs, mounted into every sandbox. */
 const hostfs = new GfsHostFs(dc, () => machineSnapshot(machineSources));
@@ -579,6 +601,20 @@ async function handle(req: Request): Promise<unknown> {
         return { ok: false, error: String(e?.message ?? e) };
       }
     }
+    case "remotesConfigure":
+      return remotes.configure(req.remotes);
+    case "remoteSync":
+      await remotes.sync(req.comb);
+      return remotes.list();
+    case "remoteResolve":
+      await remotes.resolve(req.comb, req.choice);
+      return remotes.list();
+    case "loginDeviceStart":
+      return deviceStart(smartFetch, req.host, req.clientId, req.scope);
+    case "loginDevicePoll":
+      return devicePoll(smartFetch, req.host, req.clientId, req.deviceCode);
+    case "loginToken":
+      return tokenRequest(smartFetch, req.tokenUrl, req.form);
     case "bridgeAvailable":
       setBridgeAvailable(req.available);
       status(`egress: ${egressMode()}`);

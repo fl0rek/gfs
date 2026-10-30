@@ -2,8 +2,11 @@
 
 import { AgentWorker } from "./rpc";
 import type { EntryDetail, HistoryEntry, InitInfo, MachineView, ModelConfig, VerifyReport } from "./protocol";
+import type { RemoteConfig, RemoteStatus } from "./remotes";
 import { CWD, NIX_COMB, VIEW_PATH, WORKSPACE } from "./paths";
 
+// An OAuth redirect lands here with ?code&state; keep them before anything rewrites the URL.
+const oauthReturn = location.search;
 const worker = new AgentWorker();
 const app = document.getElementById("app")!;
 
@@ -37,6 +40,22 @@ let config: ModelConfig = loadConfig();
 type Surface = "console" | "view";
 let surface: Surface = (sessionStorage.getItem("pi-on-gfs.surface") as Surface) === "view" ? "view" : "console";
 let viewStale = false; // /nix changed while you were on the console
+// Git remotes: configs (tokens included) live in this browser's localStorage, like model keys; the worker syncs.
+let remoteConfigs: RemoteConfig[] = loadRemotes();
+let remoteStatus: RemoteStatus[] = [];
+let gitView: {
+  comb: string;
+  draft: RemoteConfig | null; // null: show the connected remote; else the form
+  clientId: string;
+  device?: { code: string; uri: string; until: number };
+  busy?: string;
+} | null = null;
+function loadRemotes(): RemoteConfig[] {
+  try { return JSON.parse(localStorage.getItem("pi-on-gfs.remotes") ?? "[]"); } catch { return []; }
+}
+function saveRemotes() {
+  try { localStorage.setItem("pi-on-gfs.remotes", JSON.stringify(remoteConfigs)); } catch {}
+}
 let viewEntry: string | null = null; // the /nix entry the frame was rendered from
 let viewError: string | null = null;
 
@@ -107,6 +126,12 @@ worker.on(async (n) => {
   } else if (n.type === "status") {
     statusText = n.text;
     render();
+  } else if (n.type === "remotes") {
+    remoteStatus = n.status;
+    render();
+  } else if (n.type === "remoteAuth") {
+    remoteConfigs = remoteConfigs.map((c) => (c.comb === n.comb ? { ...c, ...n.patch } : c));
+    saveRemotes();
   } else if (n.type === "error") {
     error = n.message;
     busy = false;
@@ -570,9 +595,10 @@ function renderTimeline() {
         combs.map((c) => h("option", { value: c, selected: c === selectedComb }, c === "nix" ? "/nix (running system)" : `/datacombs/${c}`))),
       h("button", { onClick: () => doVerify(selectedComb) }, "Verify chain"),
       h("button", { class: filesView?.comb === selectedComb ? "active" : "", onClick: () => (filesView?.comb === selectedComb ? ((filesView = null), render()) : openFiles(selectedComb)) }, "Files"),
+      h("button", { class: gitView?.comb === selectedComb ? "active" : "", title: "back this comb with a git remote", onClick: () => toggleGit(selectedComb) }, "Git", gitChip(selectedComb)),
       verify ? h("span", { class: verify.ok ? "ok" : "warn" }, verify.ok ? ` ✓ ${verify.entries} entries, ${verify.objects_checked} objects hash correctly` : ` ✗ ${verify.problems.join("; ")}`) : null,
     ),
-    h("div", { class: "timeline-body" }, list, filesView?.comb === selectedComb ? renderFiles() : selectedEntry ? renderDetail() : null),
+    h("div", { class: "timeline-body" }, list, gitView?.comb === selectedComb ? renderGit() : filesView?.comb === selectedComb ? renderFiles() : selectedEntry ? renderDetail() : null),
   );
 }
 
@@ -588,7 +614,7 @@ function renderItem(it: Item): Node {
     h("span", { class: "text" }, e.message),
     h("span", { class: "meta mono" },
       n ? `${e.summary.added.length ? "+" + e.summary.added.length + " " : ""}${e.summary.modified.length ? "~" + e.summary.modified.length + " " : ""}${e.summary.removed.length ? "−" + e.summary.removed.length + " " : ""}` : "",
-      "@", short(e.id)),
+      "@", short(e.id), gitMark(e)),
   );
 }
 
@@ -668,6 +694,245 @@ function renderTreeAt(): Node {
   );
 }
 
+// ---------- git remotes ----------
+const statusOf = (comb: string) => remoteStatus.find((r) => r.comb === comb) ?? null;
+const configOf = (comb: string) => remoteConfigs.find((r) => r.comb === comb) ?? null;
+
+function gitChip(comb: string): Node | null {
+  const st = statusOf(comb);
+  if (!st) return null;
+  const text = st.state === "synced" ? (st.ahead ? `↑${st.ahead}` : "✓") : st.state === "syncing" ? "…" : st.state;
+  return h("span", { class: `chip ${st.state}`, title: st.error ?? `${st.label}: ${st.state}` }, text);
+}
+
+function gitMark(e: HistoryEntry): Node | null {
+  const st = statusOf(e.comb);
+  const sha = st?.pushed[e.id];
+  if (!sha) return null;
+  return st!.web
+    ? h("a", { class: "gitmark", href: `${st!.web}/commit/${sha}`, target: "_blank", title: `git commit ${sha}`, onClick: (ev: Event) => ev.stopPropagation() }, ` · git ${sha.slice(0, 7)}`)
+    : h("span", { class: "gitmark", title: `git commit ${sha}` }, ` · git ${sha.slice(0, 7)}`);
+}
+
+function clientIdFor(url: string): string {
+  try { return JSON.parse(localStorage.getItem("pi-on-gfs.oauthClients") ?? "{}")[new URL(url).origin] ?? ""; } catch { return ""; }
+}
+function rememberClientId(url: string, id: string) {
+  try {
+    const m = JSON.parse(localStorage.getItem("pi-on-gfs.oauthClients") ?? "{}");
+    m[new URL(url).origin] = id;
+    localStorage.setItem("pi-on-gfs.oauthClients", JSON.stringify(m));
+  } catch {}
+}
+
+function toggleGit(comb: string) {
+  if (gitView?.comb === comb) gitView = null;
+  else {
+    const cfg = configOf(comb);
+    gitView = { comb, draft: cfg ? null : newDraft(comb), clientId: "" };
+    filesView = null;
+  }
+  render();
+}
+
+function newDraft(comb: string): RemoteConfig {
+  return { comb, transport: bridgeVersion ? "git" : "github", url: "", branch: "main", username: "", token: "", corsProxy: "", auto: true };
+}
+
+async function upsertRemote(cfg: RemoteConfig) {
+  remoteConfigs = [...remoteConfigs.filter((c) => c.comb !== cfg.comb), cfg];
+  if (gitView?.comb === cfg.comb) gitView.draft = null;
+  saveRemotes();
+  remoteStatus = await worker.call({ method: "remotesConfigure", remotes: remoteConfigs });
+  render();
+}
+async function disconnectRemote(comb: string) {
+  remoteConfigs = remoteConfigs.filter((c) => c.comb !== comb);
+  saveRemotes();
+  remoteStatus = await worker.call({ method: "remotesConfigure", remotes: remoteConfigs });
+  render();
+}
+
+const isGitHub = (url: string) => { try { return new URL(url).host === "github.com"; } catch { return false; } };
+
+function renderGit(): Node {
+  const gv = gitView!;
+  const where = gv.comb === NIX_COMB ? "/nix" : `/datacombs/${gv.comb}`;
+  return h("div", { class: "detail git-view" },
+    h("div", { class: "detail-head" },
+      h("b", {}, `git remote for ${where}`),
+      h("span", { class: "muted" }, " — every history entry becomes one git commit, pushed as it lands"),
+      h("span", { class: "grow" }),
+      h("button", { class: "link", onClick: () => { gitView = null; render(); } }, "close"),
+    ),
+    gv.draft ? renderGitForm(gv, gv.draft) : renderGitStatus(gv),
+  );
+}
+
+function renderGitStatus(gv: NonNullable<typeof gitView>): Node {
+  const cfg = configOf(gv.comb);
+  const st = statusOf(gv.comb);
+  if (!cfg) return h("p", { class: "muted" }, "not connected");
+  const link = (sha: string | null) => (sha ? (st?.web ? h("a", { href: `${st.web}/commit/${sha}`, target: "_blank", class: "mono" }, sha.slice(0, 12)) : h("span", { class: "mono" }, sha.slice(0, 12))) : "—");
+  const act = async (label: string, f: () => Promise<unknown>) => {
+    gv.busy = label; render();
+    try { await f(); error = null; } catch (e: any) { error = e.message; }
+    gv.busy = undefined; render();
+  };
+  return h("div", {},
+    h("table", { class: "kv" },
+      h("tr", {}, h("th", {}, "remote"), h("td", {}, h("span", { class: "mono" }, cfg.url), ` · ${cfg.transport === "github" ? "GitHub REST API" : "git smart HTTP"}${cfg.corsProxy ? ` via ${cfg.corsProxy}` : ""}`)),
+      h("tr", {}, h("th", {}, "branch"), h("td", { class: "mono" }, cfg.branch)),
+      h("tr", {}, h("th", {}, "state"), h("td", {}, gitChip(gv.comb), st ? ` ${st.state}${st.ahead ? ` · ${st.ahead} entr${st.ahead === 1 ? "y" : "ies"} not pushed yet` : ""}` : " starting")),
+      h("tr", {}, h("th", {}, "remote tip"), h("td", {}, link(st?.remoteHead ?? null))),
+      h("tr", {}, h("th", {}, "on the remote"), h("td", {}, `${Object.keys(st?.pushed ?? {}).length} entries`)),
+      h("tr", {}, h("th", {}, "last sync"), h("td", {}, st?.lastSync ? new Date(st.lastSync).toLocaleTimeString() : "—")),
+      h("tr", {}, h("th", {}, "signed in"), h("td", {}, cfg.oauth ? `${cfg.oauth.flow}${cfg.oauth.expiresAt ? `, token until ${new Date(cfg.oauth.expiresAt).toLocaleTimeString()}` : ""}` : cfg.token ? "access token" : h("span", { class: "warn" }, "no token (read-only, public repositories)"))),
+    ),
+    st?.error ? h("div", { class: `error inline` }, st.error) : null,
+    st?.state === "diverged" ? h("div", { class: "row diverged" },
+      h("button", { disabled: !!gv.busy, onClick: () => act("keeping ours", () => worker.call({ method: "remoteResolve", comb: gv.comb, choice: "mine" })) }, "Keep mine"),
+      h("span", { class: "muted small" }, "push ours; the tip merges theirs as a second parent, ours wins the tree"),
+      h("button", { disabled: !!gv.busy, onClick: () => act("taking theirs", () => worker.call({ method: "remoteResolve", comb: gv.comb, choice: "theirs" })) }, "Take theirs"),
+      h("span", { class: "muted small" }, "their tree lands as a pull entry; our entries are pushed underneath it"),
+    ) : null,
+    h("div", { class: "row" },
+      h("button", { class: "primary", disabled: !!gv.busy, onClick: () => act("syncing", () => worker.call({ method: "remoteSync", comb: gv.comb })) }, gv.busy ?? "Sync now"),
+      h("button", { onClick: () => { gv.draft = { ...cfg }; gv.clientId = cfg.oauth?.clientId ?? clientIdFor(cfg.url); render(); } }, "Edit"),
+      h("button", { class: "danger", onClick: () => { if (confirm(`Disconnect ${gv.comb} from ${cfg.url}? Nothing is deleted on either side.`)) void disconnectRemote(gv.comb); } }, "Disconnect"),
+    ),
+    st?.events.length ? h("ul", { class: "git-events" }, [...st.events].reverse().map((e) => h("li", {}, h("span", { class: "muted mono" }, fmtTime(e.time)), " ", e.text))) : null,
+  );
+}
+
+function renderGitForm(gv: NonNullable<typeof gitView>, d: RemoteConfig): Node {
+  const gh = isGitHub(d.url);
+  const field = (label: string, key: keyof RemoteConfig, attrs: Record<string, any> = {}) =>
+    h("label", {}, label, h("input", { value: (d[key] as string) ?? "", onInput: (e: any) => { (d as any)[key] = e.target.value; }, onChange: () => render(), ...attrs }));
+  const reach =
+    d.transport === "github"
+      ? "Works from a plain tab: api.github.com answers CORS. Needs a token for anything but reading public repositories."
+      : gh
+        ? bridgeVersion ? "github.com's git endpoints send no CORS headers; the egress extension relays them." : d.corsProxy ? "Through the CORS proxy (it sees your token)." : "github.com's git endpoints send no CORS headers: install the egress extension, set a CORS proxy, or pick the GitHub API transport."
+        : "The server must send CORS for this page (Forgejo/Gitea: [repository] ACCESS_CONTROL_ALLOW_ORIGIN = " + location.origin + "), or the egress extension relays it.";
+  return h("div", { class: "git-form" },
+    h("div", { class: "grid" },
+      h("label", {}, "transport",
+        h("select", { onChange: (e: any) => { d.transport = e.target.value; render(); } },
+          h("option", { value: "git", selected: d.transport === "git" }, "git smart HTTP — any git server (Forgejo, GitHub, GitLab, …)"),
+          h("option", { value: "github", selected: d.transport === "github" }, "GitHub REST API — github.com from a plain tab"),
+        )),
+      field("repository URL", "url", { placeholder: d.transport === "github" ? "https://github.com/you/repo" : "https://forgejo.example/you/repo.git", "data-key": "git-url" }),
+      field("branch", "branch", { placeholder: "main" }),
+      d.transport === "git" ? field("user name (Basic auth; Forgejo: your login · GitHub: x-access-token)", "username") : null,
+      field(gh || d.transport === "github" ? "token (fine-grained PAT, Contents: read and write)" : "token (access token with write:repository, or sign in below)", "token", { type: "password", autocomplete: "off" }),
+      d.transport === "git" ? field("CORS proxy (optional, e.g. https://cors.isomorphic-git.org — it sees your token)", "corsProxy") : null,
+      h("details", {}, h("summary", {}, "committer (the node's git identity)"),
+        field("name", "committerName", { placeholder: info?.node ?? "browser-node" }),
+        field("email", "committerEmail", { placeholder: `${info?.node ?? "browser-node"}@gfs.invalid` }),
+      ),
+    ),
+    h("p", { class: "muted small" }, reach),
+    renderSignIn(gv, d, gh),
+    gv.device ? h("div", { class: "notice device" }, "Open ", h("a", { href: gv.device.uri, target: "_blank" }, gv.device.uri), " and enter ", h("b", { class: "mono" }, gv.device.code), ". Waiting for approval…") : null,
+    h("div", { class: "row" },
+      h("button", { class: "primary", disabled: !d.url || !d.branch, onClick: () => { const cfg = { ...d, url: d.url.trim(), branch: d.branch.trim() || "main" }; gv.draft = null; gv.device = undefined; void upsertRemote(cfg); } }, configOf(gv.comb) ? "Save" : "Connect"),
+      h("button", { onClick: () => { if (configOf(gv.comb)) { gv.draft = null; gv.device = undefined; render(); } else { gitView = null; render(); } } }, "Cancel"),
+    ),
+  );
+}
+
+function renderSignIn(gv: NonNullable<typeof gitView>, d: RemoteConfig, gh: boolean): Node | null {
+  if (!d.url) return null;
+  if (!gv.clientId) gv.clientId = clientIdFor(d.url);
+  const idField = h("input", { value: gv.clientId, placeholder: "OAuth client ID", onInput: (e: any) => (gv.clientId = e.target.value) });
+  if (gh || d.transport === "github") {
+    return h("div", { class: "signin" },
+      h("b", {}, "Sign in with GitHub"), h("span", { class: "muted small" }, " (device flow; client ID of your OAuth or GitHub App with device flow enabled)"),
+      h("div", { class: "row" }, idField,
+        h("button", { disabled: !bridgeVersion || !!gv.device, onClick: () => void githubSignIn(gv, d) }, "Sign in"),
+        bridgeVersion ? null : h("span", { class: "warn small" }, "needs the egress extension: github.com/login/* sends no CORS headers"),
+      ),
+    );
+  }
+  return h("div", { class: "signin" },
+    h("b", {}, "Sign in with Forgejo"), h("span", { class: "muted small" }, ` (OAuth2 + PKCE; a public client whose redirect URI is ${location.origin + location.pathname}; token endpoint needs [cors] or the extension)`),
+    h("div", { class: "row" }, idField, h("button", { onClick: () => void forgejoSignIn(d, gv.clientId) }, "Sign in")),
+  );
+}
+
+async function githubSignIn(gv: NonNullable<typeof gitView>, d: RemoteConfig) {
+  const host = new URL(d.url).origin;
+  const clientId = gv.clientId.trim();
+  if (!clientId) { error = "enter the OAuth client ID first"; render(); return; }
+  rememberClientId(d.url, clientId);
+  try {
+    const dc = await worker.call<{ device_code: string; user_code: string; verification_uri: string; expires_in: number; interval: number }>({ method: "loginDeviceStart", host, clientId, scope: "repo" });
+    gv.device = { code: dc.user_code, uri: dc.verification_uri, until: Date.now() + dc.expires_in * 1000 };
+    render();
+    let interval = dc.interval;
+    while (gv.device && Date.now() < gv.device.until) {
+      await new Promise((r) => setTimeout(r, interval * 1000));
+      const r = await worker.call<any>({ method: "loginDevicePoll", host, clientId, deviceCode: dc.device_code });
+      if (r.token) {
+        d.token = r.token.access_token;
+        if (d.transport === "git" && !d.username) d.username = "x-access-token";
+        d.oauth = { flow: "github-device", clientId, tokenUrl: `${host}/login/oauth/access_token`, refreshToken: r.token.refresh_token, expiresAt: r.token.expires_in ? Date.now() + r.token.expires_in * 1000 : undefined };
+        gv.device = undefined;
+        systemNotice = `signed in to ${new URL(host).host}; press ${configOf(gv.comb) ? "Save" : "Connect"}`;
+        render();
+        return;
+      }
+      if (r.slowDown) interval = r.slowDown;
+    }
+    gv.device = undefined;
+  } catch (e: any) {
+    gv.device = undefined;
+    error = e.message;
+  }
+  render();
+}
+
+const b64url = (b: Uint8Array) => btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+/** Forgejo, authorization code + PKCE: off to the forge; finishForgejoSignIn picks it up on return. */
+async function forgejoSignIn(d: RemoteConfig, clientId: string) {
+  clientId = clientId.trim();
+  if (!clientId) { error = "enter the OAuth client ID first"; render(); return; }
+  rememberClientId(d.url, clientId);
+  const base = new URL(d.url).origin;
+  const verifier = b64url(crypto.getRandomValues(new Uint8Array(48)));
+  const challenge = b64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
+  const state = b64url(crypto.getRandomValues(new Uint8Array(16)));
+  const redirect = location.origin + location.pathname;
+  sessionStorage.setItem("pi-on-gfs.oauth", JSON.stringify({ state, verifier, clientId, base, redirect, draft: d }));
+  location.assign(`${base}/login/oauth/authorize?${new URLSearchParams({ client_id: clientId, redirect_uri: redirect, response_type: "code", code_challenge: challenge, code_challenge_method: "S256", state })}`);
+}
+
+async function finishForgejoSignIn() {
+  const got = new URLSearchParams(oauthReturn);
+  const saved = sessionStorage.getItem("pi-on-gfs.oauth");
+  if (!saved || !(got.has("code") || got.has("error"))) return;
+  sessionStorage.removeItem("pi-on-gfs.oauth");
+  const rest = new URLSearchParams(oauthReturn);
+  for (const k of ["code", "state", "error", "error_description"]) rest.delete(k);
+  history.replaceState(null, "", location.pathname + (rest.size ? `?${rest}` : ""));
+  const s = JSON.parse(saved);
+  if (got.get("error")) { error = `sign-in refused: ${got.get("error")} ${got.get("error_description") ?? ""}`; return; }
+  if (got.get("state") !== s.state) { error = "sign-in: state mismatch, ignored"; return; }
+  try {
+    const tokenUrl = `${s.base}/login/oauth/access_token`;
+    const t = await worker.call<any>({ method: "loginToken", tokenUrl, form: { grant_type: "authorization_code", client_id: s.clientId, code: got.get("code")!, code_verifier: s.verifier, redirect_uri: s.redirect } });
+    const d: RemoteConfig = s.draft;
+    const cfg: RemoteConfig = { ...d, token: t.access_token, username: d.username || "oauth2", oauth: { flow: "forgejo-pkce", clientId: s.clientId, tokenUrl, refreshToken: t.refresh_token, expiresAt: t.expires_in ? Date.now() + t.expires_in * 1000 : undefined } };
+    remoteConfigs = [...remoteConfigs.filter((c) => c.comb !== cfg.comb), cfg];
+    saveRemotes();
+    systemNotice = `signed in to ${new URL(s.base).host}; ${cfg.comb} is connected to ${cfg.url}`;
+  } catch (e: any) {
+    error = `sign-in: ${e.message}`;
+  }
+}
+
 // ---------- boot ----------
 render();
 setTimeout(() => {
@@ -684,6 +949,8 @@ setTimeout(() => {
     await worker.call({ method: "configure", config });
     transcript = await worker.call({ method: "transcript" });
     for (const c of info.combs) await refreshLog(c);
+    await finishForgejoSignIn();
+    remoteStatus = await worker.call({ method: "remotesConfigure", remotes: remoteConfigs });
     render();
     if (surface === "view") void loadView();
     void worker.call({ method: "boot" });
@@ -696,4 +963,10 @@ setTimeout(() => {
 })();
 
 // Exposed for the headless test driver.
-(window as any).__pi = { worker, state: () => ({ info, transcript, logs, busy, error, statusText, bridgeVersion }) };
+(window as any).__pi = {
+  worker,
+  state: () => ({ info, transcript, logs, busy, error, statusText, bridgeVersion, remoteStatus, remoteConfigs, notice: systemNotice }),
+  connect: (cfg: RemoteConfig) => upsertRemote(cfg),
+  disconnect: (comb: string) => disconnectRemote(comb),
+  signInForgejo: (d: RemoteConfig, clientId: string) => forgejoSignIn(d, clientId),
+};
