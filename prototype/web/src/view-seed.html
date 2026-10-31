@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>view</title>
+<!--
+  /nix/view/index.html — the view the harness programs for itself.
+
+  This page is yours (pi's) to change: edit it, and the next history entry on /nix re-renders it.
+  It runs in a sandboxed iframe. The host gives it:
+    window.ue.machine   every /machine entry, as text (JSON for most; processes and mounts are TSV)
+    window.ue.view      { entry, path }  which /nix entry this page was read from
+    window.ue.prompt(t) send a message to the console as the user (e.g. "add X to the view")
+    window.ue.onUpdate(fn)  called whenever a fresh /machine snapshot arrives (every few seconds)
+  No network, no DOM access outside this frame.
+
+  This first version is an introspection dashboard. Replace it with anything.
+-->
+<style>
+:root { --bg:#111418; --panel:#171b21; --panel2:#1e242c; --line:#2a313b; --fg:#e6e9ee; --muted:#8b95a5; --accent:#7cc4ff; --ok:#7ad38a; --warn:#ffb86b; --err:#ff7b7b;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+@media (prefers-color-scheme: light) { :root { --bg:#f6f7f9; --panel:#fff; --panel2:#eef1f5; --line:#d8dde5; --fg:#1b2129; --muted:#5d6673; --accent:#0b6fcc; } }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 var(--sans); padding:14px; }
+h1 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 10px; }
+h2 { font-size:13px; margin:0 0 8px; }
+.mono { font-family:var(--mono); font-size:12px; }
+.muted { color:var(--muted); }
+.tiles { display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:10px; margin-bottom:12px; }
+.tile { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 12px; min-width:0; }
+.tile .l { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+.tile .v { font-size:22px; font-weight:600; line-height:1.15; margin:2px 0 4px; font-variant-numeric:tabular-nums; }
+.tile .s { font-size:12px; color:var(--muted); }
+.meter { height:5px; background:var(--line); border-radius:3px; overflow:hidden; margin-top:6px; }
+.meter i { display:block; height:100%; background:var(--accent); }
+.meter i.warn { background:var(--warn); }
+.panels { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:10px; }
+.panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 12px; min-width:0; overflow:auto; }
+.kv { display:grid; grid-template-columns:auto 1fr; gap:3px 12px; font-size:13px; }
+.kv dt { color:var(--muted); } .kv dd { margin:0; min-width:0; overflow-wrap:anywhere; }
+.pill { display:inline-block; padding:0 7px; border-radius:999px; font-size:11px; font-weight:600; font-family:var(--mono); }
+.pill.ro { background:#4a3c1d; color:#ffd58a; } .pill.rw { background:#1d3a2a; color:#9ae0a8; } .pill.gen { background:#2a2a4a; color:#c0b8ff; }
+.pill.ok { background:#1d3a2a; color:var(--ok); } .pill.warn { background:#4a3c1d; color:var(--warn); } .pill.err { background:#4a1d1d; color:var(--err); }
+.tree { list-style:none; margin:0; padding:0; font-family:var(--mono); font-size:12px; }
+.tree ul { list-style:none; margin:0; padding-left:16px; border-left:1px dashed var(--line); }
+.tree li { padding:2px 0; display:flex; gap:8px; flex-wrap:wrap; align-items:baseline; }
+.tree .id { color:var(--muted); min-width:3ch; text-align:right; }
+.tree .cmd { overflow-wrap:anywhere; }
+.tree .meta { color:var(--muted); font-size:11px; }
+table { border-collapse:collapse; font-size:12px; width:100%; }
+th, td { text-align:left; padding:3px 8px 3px 0; border-bottom:1px solid var(--line); vertical-align:top; }
+th { color:var(--muted); font-weight:500; }
+td.n { text-align:right; font-variant-numeric:tabular-nums; }
+.ask { display:flex; gap:8px; margin-top:12px; }
+.ask input { flex:1; min-width:0; font:inherit; padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:var(--panel2); color:var(--fg); }
+.ask button { font:inherit; padding:7px 12px; border-radius:6px; border:1px solid transparent; background:var(--accent); color:#0b1016; font-weight:600; cursor:pointer; }
+footer { margin-top:12px; font-size:12px; color:var(--muted); display:flex; gap:10px; flex-wrap:wrap; }
+</style>
+</head>
+<body>
+<h1>this node, as it describes itself</h1>
+<div id="root"></div>
+<form class="ask" id="ask"><input id="ask-text" placeholder="Ask pi to change this view…" aria-label="Ask pi to change this view"><button type="submit">Send</button></form>
+<footer id="foot"></footer>
+
+<script>
+(function () {
+  const $ = (s) => document.querySelector(s);
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const J = (t) => { try { return JSON.parse(t); } catch { return null; } };
+  const tsv = (t) => { const [h, ...rows] = String(t ?? "").trim().split("\n"); const cols = (h ?? "").split("\t"); return rows.filter(Boolean).map((r) => Object.fromEntries(r.split("\t").map((v, i) => [cols[i] ?? i, v]))); };
+  const bytes = (n) => n == null ? "—" : n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(0) + " KB" : n < 1073741824 ? (n / 1048576).toFixed(1) + " MB" : (n / 1073741824).toFixed(2) + " GB";
+  const secs = (s) => { s = Number(s) || 0; const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h ? `${h}h ${m}m` : m ? `${m}m ${s % 60}s` : `${s}s`; };
+  const short = (id) => id ? String(id).slice(0, 8) : "—";
+
+  function render() {
+    const ue = window.ue;
+    if (!ue || !ue.machine) { $("#root").innerHTML = '<p class="muted">No host data: this page expects window.ue from the harness view.</p>'; return; }
+    const m = ue.machine;
+    const session = J(m.session) || {}, system = J(m.system) || {}, shell = J(m.shell) || {}, runtime = J(m.runtime) || {}, agent = J(m.agent) || {}, storage = J(m.storage) || {};
+    const procs = tsv(m.processes), mounts = tsv("path\twhat\tmode\n" + (m.mounts ?? ""));
+    const up = secs(m.uptime);
+    const opfs = storage.opfs || {};
+    const heap = runtime.host?.jsHeapBytes;
+    const cost = agent.usage?.cost || 0;
+
+    // --- tiles ---
+    const tiles = [
+      ["uptime", up, `worker started ${session.started ? new Date(session.started).toLocaleTimeString() : "?"}`],
+      ["system", system.entry ? "/nix@" + short(system.entry) : "none", system.name || (system.note || "")],
+      ["shell", shell.ready ? "ready" : shell.booting ? "booting" : "down", `${(shell.commands || []).length} commands · ${(shell.packages || []).length} packages · ${shell.switches ?? 0} switches`],
+      ["processes", String(procs.length), `${procs.filter((p) => p.exit === "…").length} running`],
+      ["objects", String(storage.objects ?? "—"), opfs.usage != null ? `${bytes(opfs.usage)} in OPFS` : "memory only", opfs.quota ? Math.min(100, 100 * opfs.usage / opfs.quota) : null],
+      ["agent", `${agent.turns ?? 0} turns`, `${agent.toolCalls ?? 0} tool calls · $${cost.toFixed(4)}`],
+    ];
+    let html = '<div class="tiles">' + tiles.map(([l, v, s, pct]) =>
+      `<div class="tile"><div class="l">${esc(l)}</div><div class="v">${esc(v)}</div><div class="s">${esc(s)}</div>${pct != null ? `<div class="meter"><i class="${pct > 80 ? "warn" : ""}" style="width:${pct.toFixed(1)}%"></i></div>` : ""}</div>`).join("") + "</div>";
+
+    // --- process tree: node → boot / pi tool calls / you at the shell ---
+    const groups = { boot: [], pi: [], shell: [], other: [] };
+    for (const p of procs) (p.by === "boot" ? groups.boot : p.by?.startsWith("tool:") ? groups.pi : p.by === "shell" ? groups.shell : groups.other).push(p);
+    const leaf = (p) => `<li><span class="id">${esc(p.id)}</span><span class="cmd">${esc(p.command)}</span><span class="meta">${p.exit === "…" ? '<span class="pill ok">running</span>' : `exit ${esc(p.exit)}`} · ${esc(p.ms)} ms${p.changed && p.changed !== "-" ? " · changed " + esc(p.changed) : ""}${p.by?.startsWith("tool:") ? " · " + esc(p.by.slice(5, 13)) : ""}</span></li>`;
+    const branch = (name, meta, list) => list.length ? `<li><span class="cmd">${esc(name)}</span><span class="meta">${esc(meta)}</span><ul>${list.map(leaf).join("")}</ul></li>` : "";
+    html += '<div class="panels">';
+    html += `<div class="panel"><h2>processes</h2><ul class="tree"><li><span class="cmd">${esc(session.node || "node")}</span><span class="meta">${esc(runtime.sdk || "")}</span><ul>` +
+      branch("boot", "system start", groups.boot) +
+      branch("pi", `${esc(session.harness || "pi")} · ${esc(agent.model || "")}`, groups.pi) +
+      branch("you", "$ from the console", groups.shell) +
+      branch("other", "", groups.other) +
+      (procs.length ? "" : '<li class="muted">nothing spawned yet</li>') +
+      "</ul></li></ul></div>";
+
+    // --- machine ---
+    html += `<div class="panel"><h2>/machine</h2><dl class="kv">
+      <dt>session</dt><dd class="mono">${esc(session.id)}</dd>
+      <dt>harness</dt><dd>${esc(session.harness)} · ${esc(session.model)}${session.turn ? ` · turn ${esc(session.turn)}` : ""}</dd>
+      <dt>system</dt><dd class="mono">${esc(system.path || "—")}${system.since ? `<span class="muted"> since ${esc(new Date(system.since).toLocaleTimeString())}</span>` : ""}</dd>
+      <dt>packages</dt><dd>${(system.packages || []).map((p) => `<span class="pill gen">${esc(p.name)}</span>`).join(" ") || "—"}</dd>
+      <dt>runtime</dt><dd>${esc(runtime.sdk || "?")} · heap ${bytes(runtime.heapBytes)} · ${runtime.crossOriginIsolated ? "isolated" : "not isolated"}${runtime.sharedArrayBuffer ? "" : " · no SharedArrayBuffer"}</dd>
+      <dt>host</dt><dd>${esc(runtime.host?.hardwareConcurrency ?? "?")} cores${runtime.host?.deviceMemoryGiB ? ` · ${esc(runtime.host.deviceMemoryGiB)} GiB` : ""}${heap ? ` · JS heap ${bytes(heap.used)} / ${bytes(heap.limit)}` : ""}</dd>
+      <dt>egress</dt><dd>${esc(m.egress)}</dd>
+    </dl></div>`;
+
+    // --- mounts + storage ---
+    const mode = (s) => s.startsWith("ro") ? "ro" : s.startsWith("rw") ? "rw" : "gen";
+    html += `<div class="panel"><h2>mounts</h2><table><tr><th>path</th><th>what</th><th>mode</th></tr>` +
+      mounts.map((r) => `<tr><td class="mono">${esc(r.path)}</td><td>${esc(r.what)}</td><td><span class="pill ${mode(r.mode || "")}">${esc(r.mode)}</span></td></tr>`).join("") + "</table>" +
+      `<h2 style="margin-top:10px">combs</h2><table><tr><th>comb</th><th>head</th><th class="n">files</th><th class="n">bytes</th></tr>` +
+      (storage.combs || []).map((c) => `<tr><td class="mono">${esc(c.name)}</td><td class="mono">${esc(short(c.head))}</td><td class="n">${esc(c.files)}</td><td class="n">${bytes(c.bytes)}</td></tr>`).join("") + "</table></div>";
+
+    html += "</div>";
+    $("#root").innerHTML = html;
+    $("#foot").innerHTML = `<span>rendered from <span class="mono">${esc(ue.view?.path || "/nix/view/index.html")}</span> at <span class="mono">/nix@${esc(short(ue.view?.entry))}</span></span><span>edit that file (pi, the Files editor, or !cmd) and this re-renders</span><span>snapshot ${new Date().toLocaleTimeString()}</span>`;
+  }
+
+  $("#ask").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const t = $("#ask-text").value.trim();
+    if (!t || !window.ue?.prompt) return;
+    window.ue.prompt(t);
+    $("#ask-text").value = "";
+  });
+
+  render();
+  if (window.ue?.onUpdate) window.ue.onUpdate(render);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,33 @@
+// bash sees the gfs root: /datacombs/<comb> and /nix; writes under /nix switch the system.
+import puppeteer from "puppeteer-core";
+const browser = await puppeteer.launch({ executablePath: process.env.CHROME ?? "/opt/pw-browsers/chromium-1248/chrome-linux64/chrome", headless: true, protocolTimeout: 180000, args: ["--no-sandbox", "--disable-gpu"] });
+const page = await browser.newPage();
+page.on("pageerror", (e) => console.log(`  [pageerror] ${e.message}`));
+let failures = 0;
+const check = (c, m) => { console.log(`${c ? "ok " : "FAIL"} ${m}`); if (!c) failures++; };
+const call = (req) => page.evaluate((r) => window.__pi.worker.call(r), req);
+const tool = (name, params) => call({ method: "debugTool", name, params });
+const text = (r) => r.content.map((c) => c.text).join("");
+await page.goto("http://localhost:4173/", { waitUntil: "load" });
+await page.waitForFunction(() => window.__pi.state().info?.system || /unavailable|refused|failed/.test(window.__pi.state().statusText), { timeout: 180000 });
+const r1 = await tool("bash", { command: "pwd; ls /; ls /datacombs; ls /nix; ls /machine | head -3" });
+console.log("  " + text(r1).trim().split("\n").join("\n  "));
+const o = text(r1);
+check(/^\/datacombs$/m.test(o), "cwd is /datacombs");
+check(/datacombs/.test(o) && /\bnix\b/.test(o) && /\bmachine\b/.test(o), "/ has datacombs, nix, machine");
+check(/session/.test(o) && /workspace/.test(o), "/datacombs lists the combs");
+check(/machine\.json/.test(o) && /flake\.nix/.test(o), "/nix has the flake and the manifest");
+const r2 = await tool("bash", { command: "grep -c '\"kind\"' /nix/machine.json; ls /datacombs/session" });
+check(/^12$/m.test(text(r2)), `reads across the root: ${JSON.stringify(text(r2)).slice(0, 100)}`);
+// a write under /nix from the shell is a switch
+const before = await page.evaluate(() => window.__pi.state().info.system.entry);
+const r3 = await tool("bash", { command: `sed -i 's/"name": "[^"]*"/"name": "renamed from bash"/' /nix/machine.json && grep name /nix/machine.json` });
+check(!r3.isError && /renamed from bash/.test(text(r3)), "sed -i on /nix/machine.json from bash");
+await page.waitForFunction((b) => window.__pi.state().info.system.entry !== b, { timeout: 60000 }, before);
+const st = await page.evaluate(() => window.__pi.state());
+check(st.info.system.name === "renamed from bash", `…switched the system: ${st.info.system.name}`);
+const nixLog = await call({ method: "log", comb: "nix" });
+check(nixLog[0].kind === "switch" && nixLog[1].tool_name === "bash", "…as a bash tool-call entry on /nix, then the switch");
+await browser.close();
+console.log(failures ? `${failures} FAILED` : "all checks passed");
+process.exit(failures ? 1 : 0);

@@ -1,0 +1,10 @@
+gfs-core/target/
+web/node_modules/
+web/dist/
+web/src/gfs-wasm/
+web/.vite/
+web/e2e.png
+web/shot.png
+web/public/packages/*.webc
+web/public/system/
+web/public/machine/

@@ -1,0 +1,37 @@
+// Edit /nix/machine.json by hand in the page's editor → external entry → switch.
+import puppeteer from "puppeteer-core";
+const browser = await puppeteer.launch({ executablePath: "/opt/pw-browsers/chromium-1248/chrome-linux64/chrome", headless: true, protocolTimeout: 120000, args: ["--no-sandbox", "--disable-gpu"] });
+const page = await browser.newPage();
+await page.setViewport({ width: 1440, height: 900 });
+page.on("pageerror", (e) => console.log(`  [pageerror] ${e.message}`));
+let failures = 0;
+const check = (c, m) => { console.log(`${c ? "ok " : "FAIL"} ${m}`); if (!c) failures++; };
+const call = (req) => page.evaluate((r) => window.__pi.worker.call(r), req);
+await page.goto("http://localhost:4173/", { waitUntil: "load" });
+await page.waitForFunction(() => window.__pi.state().info?.system || /unavailable|refused|failed/.test(window.__pi.state().statusText), { timeout: 180000 });
+await page.select(".pane.timeline select", "nix");
+await new Promise((r) => setTimeout(r, 300));
+await page.evaluate(() => [...document.querySelectorAll(".pane.timeline button")].find((b) => b.textContent === "Files").click());
+await page.waitForSelector(".file-list a");
+const names = await page.$$eval(".file-list a", (as) => as.map((a) => a.textContent));
+check(names.includes("machine.json") && names.includes("flake.nix"), `files listed: ${names.join(", ")}`);
+await page.evaluate(() => [...document.querySelectorAll(".file-list a")].find((a) => a.textContent === "machine.json").click());
+await page.waitForSelector(".editor textarea");
+const before = await call({ method: "log", comb: "nix" });
+await page.evaluate(() => {
+  const ta = document.querySelector(".editor textarea");
+  ta.value = ta.value.replace(/"name": "[^"]*"/, '"name": "edited by hand in the browser"');
+  ta.dispatchEvent(new Event("input", { bubbles: true }));
+});
+await page.waitForFunction(() => [...document.querySelectorAll(".editor button")].some((b) => b.textContent === "Save & commit" && !b.disabled));
+await page.evaluate(() => [...document.querySelectorAll(".editor button")].find((b) => b.textContent === "Save & commit").click());
+await page.waitForFunction((n) => window.__pi.state().logs.nix?.length >= n + 2, { timeout: 60000 }, before.length);
+const after = await call({ method: "log", comb: "nix" });
+check(after[1].kind === "external" && after[1].author.harness === "editor" && after[0].kind === "switch", `external entry by the editor, then the switch (${after[1].kind}/${after[1].author.harness})`);
+await page.waitForFunction((id) => window.__pi.state().info.system?.entry === id, { timeout: 60000 }, after[1].id);
+const st = await page.evaluate(() => window.__pi.state());
+check(st.info.system.name === "edited by hand in the browser", `system switched: ${st.info.system.name}`);
+await page.screenshot({ path: process.env.SHOT ?? "editor.png" });
+await browser.close();
+console.log(failures ? `${failures} FAILED` : "all checks passed");
+process.exit(failures ? 1 : 0);

@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "pi on gfs — egress bridge (prototype)",
+  "version": "0.0.1",
+  "description": "Lets the pi-on-gfs prototype page fetch any URL without CORS, by relaying requests through this extension. Throwaway.",
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js",
+    "scripts": ["background.js"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://fl0rek.github.io/*", "http://localhost/*", "http://127.0.0.1/*"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": { "id": "pi-on-gfs-bridge@prototype.invalid" }
+  }
+}

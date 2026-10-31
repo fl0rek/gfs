@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>pi on gfs — prototype</title>
+    <!-- GitHub Pages cannot send COOP/COEP headers; this service worker adds them so SharedArrayBuffer (needed by the WASIX runtime) works. -->
+    <script src="./coi-serviceworker.js"></script>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
