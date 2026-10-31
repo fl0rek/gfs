@@ -39,3 +39,11 @@ To react to:
 3. Should a view see every comb on the node, or only what the session is granted?
 4. Is "ask pi" enough as the act from a ticket, or should the view get WayQuest's own acts (claim, comment, resolve)?
 5. One header tab per view, or a view picker once there are more?
+
+## Reactions (2026-10-31)
+
+1. **One world.** Every project is a biome in one world, not a separate overworld per map. WayQuest's own map keeps a multi-effort world out of scope; this view takes the other side.
+2. **All combs, `nix` included.** Uncharted combs are land in the world too. (Asked what `session` does: it holds pi's transcript, `transcript.json`, committed once per turn as a `turn` entry and read back on reload.)
+3. **Views see all combs.**
+4. Open. The user asked what acts exist now: only "ask pi", which sends a message through `ue.prompt`; the view itself never writes.
+5. **One tab per view**, so three for now: console | view | wayquest.
