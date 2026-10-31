@@ -1,7 +1,7 @@
 // PROTOTYPE. Builds the WayQuest view as one standalone HTML file, for looking at it outside the app.
 //
 // The page is src/views/wayquest/index.html unchanged. In place of the app's window.ue it gets a stand-in
-// serving a snapshot of a node: one comb per git repository given (only its .scratch/ files, with one
+// serving a snapshot of a node: one comb per git repository given (only its wayfinder maps and tickets, with one
 // history entry per commit that touched .scratch/, carrying the commit's session and model trailers),
 // plus the nix comb holding the views, and the empty workspace and session combs every node has.
 //
@@ -41,6 +41,7 @@ for (const spec of specs) {
     const tree = {};
     for (const line of git(dir, "ls-tree", "-r", sha, "--", ".scratch").split("\n").filter(Boolean)) {
       const [meta, path] = line.split("\t");
+      if (!/^\.scratch\/[^/]+\/(map\.md|issues\/[^/]+\.md)$/.test(path)) continue; // the maps, nothing else
       const blob = meta.split(" ")[2];
       tree[path] = blob;
       if (!(blob in blobs)) blobs[blob] = git(dir, "cat-file", "-p", blob);
@@ -133,8 +134,15 @@ window.ue={machine:{},view:{path:"/nix/view/wayquest/index.html",name:"wayquest"
   onUpdate:function(){},onHistory:function(){},
   setState:function(s){window.ue.state=s;try{localStorage.setItem("wayquest-standalone",JSON.stringify(s))}catch(e){}}};
 })();</script>`;
+// WayQuest's world glue, run up front as a classic script (the page would otherwise import it from a blob URL,
+// which a strict content security policy refuses). The same transform as classicGlue() in the page.
+const glueJs = nixFiles["view/wayquest/world.js"];
+const names = [...glueJs.matchAll(/^export function (\w+)/gm)].map((m) => m[1]);
+const glue = glueJs.replace(/^export function /gm, "function ").replace(/import\.meta\.url/g, "location.href")
+  .replace(/^export \{([^}]*)\};?\s*$/m, (_, list) => `window.__wqWorld = { ${[...names, ...list.split(",").map((x) => x.trim()).filter(Boolean).map((x) => x.replace(/^(\w+) as (\w+)$/, "$2: $1"))].join(", ")} };`);
+if (!glue.includes("window.__wqWorld")) throw new Error("world.js: could not find its export list");
 const page = nixFiles["view/wayquest/index.html"];
 const at = page.search(/<head[^>]*>/i);
-const html = page.slice(0, page.indexOf(">", at) + 1) + shim + page.slice(page.indexOf(">", at) + 1);
+const html = page.slice(0, page.indexOf(">", at) + 1) + shim + `<script>(function(){${glue.replace(/<\/script/gi, "<\\/script")}\n})();</script>` + page.slice(page.indexOf(">", at) + 1);
 writeFileSync(out, html);
 console.log(`${out}: ${(html.length / 1024).toFixed(0)} KB`);

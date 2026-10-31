@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WayQuest</title>
 <!--
   /nix/view/wayquest/index.html — WayQuest as a view: every project in datacombs.
@@ -193,23 +193,30 @@ function save() {
 
 // ---------- WayQuest's world crate (wasm) ----------
 async function loadWorld() {
-  const js = await ue.read(`${HERE}/world.js`);
   const wasm = await ue.bytes(`${HERE}/world_bg.wasm`);
-  let mod;
-  try {
-    mod = await import(URL.createObjectURL(new Blob([js], { type: "text/javascript" })));
-  } catch (e) {
-    // No module import from a blob here: run the same glue as a classic script.
-    const src = js.replace(/^export function /gm, "function ").replace(/import\.meta\.url/g, "location.href")
-      .replace(/^export \{([^}]*)\};?\s*$/m, (_, names) => `window.__wqWorld = { ${names.replace(/(\w+) as (\w+)/g, "$2: $1")} };`);
-    const s = document.createElement("script");
-    s.textContent = src;
-    document.head.append(s);
-    mod = window.__wqWorld;
-    if (!mod) throw e;
+  // A host may have run the glue already (the standalone page does, as an inline script).
+  let mod = window.__wqWorld;
+  if (!mod) {
+    const js = await ue.read(`${HERE}/world.js`);
+    try {
+      mod = await import(URL.createObjectURL(new Blob([js], { type: "text/javascript" })));
+    } catch (e) {
+      // No module import from a blob here: run the same glue as a classic script.
+      const s = document.createElement("script");
+      s.textContent = classicGlue(js);
+      document.head.append(s);
+      mod = window.__wqWorld;
+      if (!mod) throw e;
+    }
   }
   await mod.default({ module_or_path: wasm });
   return mod;
+}
+/** wasm-bindgen's ES module glue as a classic script that sets window.__wqWorld. */
+function classicGlue(js) {
+  const names = [...js.matchAll(/^export function (\w+)/gm)].map((m) => m[1]);
+  return js.replace(/^export function /gm, "function ").replace(/import\.meta\.url/g, "location.href")
+    .replace(/^export \{([^}]*)\};?\s*$/m, (_, list) => `window.__wqWorld = { ${[...names, ...list.split(",").map((x) => x.trim()).filter(Boolean).map((x) => x.replace(/^(\w+) as (\w+)$/, "$2: $1"))].join(", ")} };`);
 }
 
 // ---------- the art (Kenney, CC0; cells as WayQuest's canvas uses them) ----------
