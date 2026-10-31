@@ -61,11 +61,13 @@ try {
 
   // The wayquest view.
   await page.click(".surfaces .tab:nth-child(3)");
-  await until(async () => (await inFrame(() => document.querySelectorAll(".card").length)) === maps.length, "the atlas charts both maps");
-  const cards = await inFrame(() => [...document.querySelectorAll(".card .title")].map((e) => e.textContent));
-  check(cards.length === maps.length, `atlas cards: ${cards.join(" / ")}`);
-  const uncharted = await inFrame(() => document.body.innerText.includes("/datacombs/workspace") && document.body.innerText.includes("/nix"));
-  check(uncharted, "workspace, session and nix are listed as uncharted");
+  // One world: a region per comb, so the panel lists every comb, charted or not.
+  await until(async () => (await inFrame(() => document.querySelectorAll(".proj-row").length)) === combs.length, "a region for every comb");
+  const rows = await inFrame(() => [...document.querySelectorAll(".proj-row")].map((e) => e.querySelector(".name").textContent + " | " + e.querySelector(".proj").textContent));
+  check(rows.filter((r) => !r.endsWith("no map")).length === maps.length, `regions: ${rows.join(" / ")}`);
+  check(["/datacombs/workspace", "/datacombs/session", "/nix"].every((n) => rows.includes(`${n} | no map`)), "workspace, session and nix are land without a map");
+  const world = await inFrame(() => { const c = document.querySelector(".world canvas"); return c && c.width > 0; });
+  check(world, "the world is drawn");
   await until(async () => (await inFrame(() => document.querySelectorAll(".feed .row").length)) > 0, "recent changes", 30000);
   const feed = await inFrame(() => document.querySelector(".feed .row")?.innerText);
   check(/pi|session/.test(feed ?? ""), `changes are attributed to the session: ${feed?.replace(/\s+/g, " ").slice(0, 120)}`);
@@ -88,12 +90,13 @@ try {
   await until(async () => (await inFrame(() => document.querySelector(".feed .row")?.innerText ?? "")).includes("held by florek"), "the change in the feed", 30000);
   check(true, "the feed says who took it: " + (await inFrame(() => document.querySelector(".feed .row")?.innerText.replace(/\s+/g, " ").slice(0, 100))));
 
-  // Into one overworld, and a ticket.
-  await (await frame().$(".card")).click();
-  await until(async () => (await inFrame(() => !!document.querySelector(".world canvas") && document.querySelector(".world canvas").width > 0)), "the overworld");
+  // Into one region, and a ticket.
+  await (await frame().$(".proj-row")).click();
+  await until(async () => !!(await inFrame(() => document.querySelector(".panel .crumbs"))), "a region");
+  check(true, `region panel: ${await inFrame(() => document.querySelector(".panel h3")?.textContent)}`);
   await new Promise((r) => setTimeout(r, 800));
   await shot("app-world");
-  await (await frame().$(".panel .row")).click();
+  await (await frame().$(".panel .row.click")).click();
   await until(async () => !!(await inFrame(() => document.querySelector(".panel .kv"))), "a ticket");
   const title = await inFrame(() => document.querySelector(".panel h3")?.textContent);
   check(!!title, `ticket panel: ${title}`);

@@ -47,3 +47,12 @@ To react to:
 3. **Views see all combs.**
 4. Open. The user asked what acts exist now: only "ask pi", which sends a message through `ue.prompt`; the view itself never writes.
 5. **One tab per view**, so three for now: console | view | wayquest.
+
+## Prototype, round 2 (2026-10-31)
+
+Rebuilt on the reactions. Same link for the standalone copy.
+
+- **One world.** Every comb is a region with its own biome (meadow, autumn, desert, snow, bloom, marsh). Regions sit side by side, meet along wandering borders, and the land ends in sea. A biome recolours the green pixels of the same Kenney sheets, and the desert and the snow grow their own plants. Biomes are fixed for the node's own combs (`nix` snow, `session` bloom, `workspace` autumn); other combs get one picked from their name, different from their neighbours' while biomes last.
+- **All combs.** A comb with a map is that map's overworld, laid out by WayQuest as before. A comb without one is land (WayQuest's terrain for an empty map, seeded by the comb's name) with a building: a keep for `nix`, houses for `session` and `workspace`. Tapping it shows what the comb is for, its size and its recent entries.
+- The atlas is gone. The panel beside the world holds what it had: what needs you across every map, every comb with its progress and newest entry, and the recent changes. Tapping a region, ticket, fog cloud or destination opens it there; breadcrumbs lead back.
+- Known limit: places come from the order of comb names, so a new comb can shift the regions after it.

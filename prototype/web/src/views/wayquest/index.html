@@ -5,16 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WayQuest</title>
 <!--
-  /nix/view/wayquest/index.html — WayQuest as a view: every project in datacombs.
+  /nix/view/wayquest/index.html — WayQuest as a view: every comb in datacombs, as one world.
 
-  A project is a comb. A comb that carries a wayfinder map (.scratch/<effort>/map.md plus issues/NN-*.md)
-  is charted, and each map opens as an overworld: cleared territory, the frontier, explorers at work,
-  beacons (monsters) where you are needed, and fog for what is not yet specified. Combs without a map
-  are listed as uncharted.
+  Each comb is a region of the world with its own biome. A comb that carries a wayfinder map
+  (.scratch/<effort>/map.md plus issues/NN-*.md) is charted: its region is that map's overworld, with
+  cleared territory, the frontier, explorers at work, beacons (monsters) where you are needed, and fog
+  for what is not yet specified. A comb without a map is land with a building on it.
 
   Everything WayQuest knows about wayfinder (parsing, sensing, layout, roads, terrain, what changed)
   comes from its own world crate, compiled to wasm: world.js + world_bg.wasm, beside this file.
-  This page only reads files and draws. The sprites are Kenney's (CC0), in sheets/.
+  This page only reads files, places the regions and draws. The sprites are Kenney's (CC0), in sheets/.
 
   The host gives this page window.ue (all reads are read-only, by gfs path):
     ue.combs                 every comb: name, head, entries, files, newest entry, git remote
@@ -28,87 +28,66 @@
 -->
 <style>
 :root { --bg:#0f1216; --panel:#161a20; --panel2:#1d232b; --line:#29313b; --fg:#e7eaef; --muted:#8a94a4; --accent:#ffcc66; --link:#8cc8ff;
-        --cleared:#9aa3ad; --frontier:#a6f08c; --claimed:#ffc94d; --held:#ff6b59; --blocked:#5c6578; --fog:#c7cde0;
+        --cleared:#9aa3ad; --frontier:#a6f08c; --claimed:#ffc94d; --held:#ff6b59; --blocked:#5c6578;
         --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 * { box-sizing: border-box; }
-html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:14px/1.45 var(--sans); -webkit-text-size-adjust:100%; }
+html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:14px/1.45 var(--sans); -webkit-text-size-adjust:100%; overflow:hidden; }
 button { font:inherit; color:inherit; cursor:pointer; }
-input, textarea { font:inherit; color:var(--fg); background:var(--panel2); border:1px solid var(--line); border-radius:6px; padding:6px 8px; }
+input { font:inherit; color:var(--fg); background:var(--panel2); border:1px solid var(--line); border-radius:6px; padding:6px 8px; }
 .mono { font-family:var(--mono); font-size:12px; }
 .muted { color:var(--muted); }
 .small { font-size:12px; }
-a, .link { color:var(--link); text-decoration:none; cursor:pointer; }
+.link { color:var(--link); cursor:pointer; }
 .link:hover { text-decoration:underline; }
-
-/* loading */
 .loading { display:flex; align-items:center; justify-content:center; height:100%; flex-direction:column; gap:10px; color:var(--muted); padding:20px; text-align:center; }
 .loading b { color:var(--fg); font-size:18px; letter-spacing:.02em; }
 .err { color:#ff9d9d; white-space:pre-wrap; font-family:var(--mono); font-size:12px; }
 
-/* atlas */
-.atlas { max-width:1180px; margin:0 auto; padding:16px 14px 40px; }
-.atlas header { display:flex; align-items:flex-end; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:14px; }
-.brand { font-size:22px; font-weight:700; letter-spacing:.01em; }
-.brand span { color:var(--accent); }
-.sub { color:var(--muted); font-size:13px; }
-.totals { display:flex; gap:8px; flex-wrap:wrap; }
-.total { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:6px 10px; min-width:84px; }
-.total .v { font-size:18px; font-weight:700; font-variant-numeric:tabular-nums; }
-.total .l { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
-h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:22px 0 8px; font-weight:600; }
-.needs { background:linear-gradient(180deg, rgba(255,107,89,.10), rgba(255,107,89,.03)); border:1px solid rgba(255,107,89,.35); border-radius:10px; padding:4px 0; }
-.row { display:flex; gap:10px; align-items:baseline; padding:7px 12px; cursor:pointer; min-width:0; }
-.row:hover { background:rgba(255,255,255,.03); }
-.row .t { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.row .proj { color:var(--muted); font-family:var(--mono); font-size:12px; flex:none; }
-.cards { display:grid; grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); gap:12px; }
-.card { background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden; cursor:pointer; display:flex; flex-direction:column; transition:border-color .15s, transform .15s; min-width:0; }
-.card:hover { border-color:#3b4656; transform:translateY(-1px); }
-.thumb { display:block; width:100%; aspect-ratio:16/7; background:#1d2a1c; image-rendering:auto; }
-.card .body { padding:10px 12px 12px; display:flex; flex-direction:column; gap:6px; min-width:0; }
-.card .top { display:flex; justify-content:space-between; gap:8px; align-items:baseline; }
-.card .title { font-weight:650; font-size:15px; line-height:1.3; }
-.card .dest { color:var(--muted); font-size:12.5px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
-.bar { height:6px; background:var(--panel2); border-radius:3px; overflow:hidden; display:flex; }
-.bar i { display:block; height:100%; }
-.chips { display:flex; flex-wrap:wrap; gap:6px; }
-.chip { display:inline-flex; gap:5px; align-items:center; font-size:12px; padding:1px 8px; border-radius:999px; background:var(--panel2); border:1px solid var(--line); white-space:nowrap; }
-.dot { width:8px; height:8px; border-radius:50%; display:inline-block; flex:none; }
-.last { font-size:12px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.pill { display:inline-block; padding:0 7px; border-radius:999px; font-size:11px; font-weight:600; font-family:var(--mono); background:var(--panel2); border:1px solid var(--line); color:var(--muted); white-space:nowrap; }
-.pill.git { color:#b9d7ff; }
-.pill.ok { color:var(--frontier); } .pill.warn { color:var(--claimed); } .pill.bad { color:var(--held); }
-.list { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:4px 0; }
-.feed .row { cursor:default; align-items:flex-start; }
-.feed .when { color:var(--muted); font-size:12px; width:62px; flex:none; font-variant-numeric:tabular-nums; }
-.feed .what { flex:1; min-width:0; }
-.feed .who { color:var(--muted); font-size:12px; }
-.empty { color:var(--muted); padding:12px; }
-footer.settings { margin-top:26px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; color:var(--muted); font-size:12px; }
-footer.settings input { width:140px; }
-
-/* world */
-.world { position:fixed; inset:0; display:grid; grid-template-columns:1fr 360px; grid-template-rows:auto 1fr; }
-.wbar { grid-column:1 / -1; display:flex; align-items:center; gap:10px; padding:7px 10px; border-bottom:1px solid var(--line); background:var(--panel); min-width:0; }
-.wbar .back { background:var(--panel2); border:1px solid var(--line); border-radius:7px; padding:3px 10px; flex:none; }
-.wbar .name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
-.wbar .name b { font-weight:650; }
-.stage { position:relative; overflow:hidden; background:#24361f; min-height:0; }
+.world { position:fixed; inset:0; display:grid; grid-template-columns:1fr 370px; grid-template-rows:1fr; }
+.stage { position:relative; overflow:hidden; background:#2c6f8c; min-height:0; }
 .stage canvas { position:absolute; inset:0; width:100%; height:100%; touch-action:none; display:block; cursor:grab; }
 .stage canvas.drag { cursor:grabbing; }
 .hud { position:absolute; right:10px; bottom:10px; display:flex; flex-direction:column; gap:6px; }
 .hud button { width:34px; height:34px; border-radius:8px; border:1px solid rgba(255,255,255,.15); background:rgba(15,18,22,.78); font-size:16px; line-height:1; }
+.title-plate { position:absolute; left:10px; top:10px; background:rgba(15,18,22,.8); border:1px solid rgba(255,255,255,.12); border-radius:9px; padding:5px 10px; pointer-events:none; }
+.brand { font-size:17px; font-weight:700; letter-spacing:.01em; }
+.brand span { color:var(--accent); }
 .legend { position:absolute; left:10px; bottom:10px; background:rgba(15,18,22,.78); border:1px solid rgba(255,255,255,.12); border-radius:8px; padding:5px 9px; font-size:11.5px; display:flex; gap:10px; flex-wrap:wrap; max-width:calc(100% - 70px); }
 .legend span { display:inline-flex; gap:5px; align-items:center; white-space:nowrap; }
-.panel { border-left:1px solid var(--line); background:var(--panel); overflow:auto; min-height:0; padding:12px 14px 30px; }
+.panel { border-left:1px solid var(--line); background:var(--panel); overflow:auto; min-height:0; padding:10px 14px 30px; }
 .panel h3 { font-size:16px; margin:2px 0 6px; line-height:1.3; }
 .panel h4 { font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:16px 0 6px; font-weight:600; }
-.panel .row { padding:5px 0; }
-.panel .row:hover { background:none; }
+.crumbs { font-size:12px; color:var(--muted); margin-bottom:4px; }
+.row { display:flex; gap:9px; align-items:baseline; padding:5px 0; min-width:0; }
+.row.click { cursor:pointer; }
+.row.click:hover .t { text-decoration:underline; }
+.row .t { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.row .proj { color:var(--muted); font-family:var(--mono); font-size:11.5px; flex:none; }
+.totals { display:grid; grid-template-columns:repeat(4, 1fr); gap:6px; margin:8px 0 4px; }
+.total { background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:5px 8px; }
+.total .v { font-size:17px; font-weight:700; font-variant-numeric:tabular-nums; }
+.total .l { font-size:10.5px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }
+.needs { background:linear-gradient(180deg, rgba(255,107,89,.10), rgba(255,107,89,.03)); border:1px solid rgba(255,107,89,.35); border-radius:9px; padding:2px 10px; }
+.proj-row { display:flex; flex-direction:column; gap:4px; padding:8px 0; border-bottom:1px solid var(--line); cursor:pointer; }
+.proj-row:last-child { border-bottom:none; }
+.proj-row .top { display:flex; gap:8px; align-items:baseline; }
+.proj-row .name { font-weight:650; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.swatch { width:10px; height:10px; border-radius:3px; display:inline-block; flex:none; border:1px solid rgba(255,255,255,.25); }
+.bar { height:5px; background:var(--panel2); border-radius:3px; overflow:hidden; display:flex; }
+.bar i { display:block; height:100%; }
+.chips { display:flex; flex-wrap:wrap; gap:6px; }
+.chip { display:inline-flex; gap:5px; align-items:center; font-size:12px; padding:1px 8px; border-radius:999px; background:var(--panel2); border:1px solid var(--line); white-space:nowrap; }
+.dot { width:8px; height:8px; border-radius:50%; display:inline-block; flex:none; }
+.pill { display:inline-block; padding:0 7px; border-radius:999px; font-size:11px; font-weight:600; font-family:var(--mono); background:var(--panel2); border:1px solid var(--line); color:var(--muted); white-space:nowrap; }
+.pill.git { color:#b9d7ff; } .pill.bad { color:var(--held); }
+.feed .row { align-items:flex-start; }
+.feed .when { color:var(--muted); font-size:12px; width:58px; flex:none; font-variant-numeric:tabular-nums; }
+.feed .what { flex:1; min-width:0; }
+.feed .who { color:var(--muted); font-size:12px; }
 .kv { display:grid; grid-template-columns:auto 1fr; gap:3px 10px; font-size:13px; margin:8px 0; }
 .kv dt { color:var(--muted); } .kv dd { margin:0; min-width:0; overflow-wrap:anywhere; }
 .md { font-size:13.5px; overflow-wrap:anywhere; }
-.md h1, .md h2, .md h3, .md h4 { font-size:12px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); margin:14px 0 4px; }
+.md h4 { font-size:12px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); margin:14px 0 4px; }
 .md p { margin:6px 0; }
 .md ul, .md ol { margin:6px 0; padding-left:20px; }
 .md li { margin:2px 0; }
@@ -119,18 +98,20 @@ footer.settings input { width:140px; }
 .ask { display:flex; gap:6px; margin-top:10px; }
 .ask input { flex:1; min-width:0; }
 .ask button { border:1px solid transparent; background:var(--accent); color:#1a1408; font-weight:650; border-radius:6px; padding:6px 10px; }
+.note { color:var(--accent); font-size:12px; margin:4px 0; }
+.settings { margin-top:22px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; color:var(--muted); font-size:12px; }
+.settings input { width:120px; }
 .toast { position:fixed; left:50%; bottom:18px; transform:translateX(-50%); background:#222a35; border:1px solid var(--line); padding:8px 12px; border-radius:8px; font-size:13px; max-width:90vw; z-index:10; }
 .sheet-toggle { display:none; }
 
 @media (max-width: 760px) {
-  .world { grid-template-columns:1fr; grid-template-rows:auto 1fr auto; }
-  .panel { border-left:none; border-top:1px solid var(--line); max-height:46vh; padding-top:6px; }
-  .panel.collapsed { max-height:none; overflow:hidden; }
+  .world { grid-template-columns:1fr; grid-template-rows:1fr auto; }
+  .panel { border-left:none; border-top:1px solid var(--line); max-height:48vh; padding-top:4px; }
+  .panel.collapsed { overflow:hidden; }
   .panel.collapsed .content { display:none; }
-  .sheet-toggle { display:flex; width:100%; justify-content:space-between; align-items:center; background:none; border:none; padding:4px 0 8px; color:var(--muted); font-size:12px; }
-  .cards { grid-template-columns:1fr; }
+  .sheet-toggle { display:flex; width:100%; justify-content:space-between; align-items:center; background:none; border:none; padding:4px 0 8px; color:var(--muted); font-size:12px; gap:8px; }
+  .sheet-toggle span:first-child { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .legend { display:none; }
-  .row .proj { display:none; }
 }
 </style>
 </head>
@@ -173,6 +154,8 @@ function ago(t) {
   return new Date(t).toISOString().slice(0, 10);
 }
 const short = (id) => (id ? String(id).slice(0, 8) : "");
+const trim = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many || one + "s"}`;
 let toastTimer = 0;
 function toast(text) {
   document.querySelectorAll(".toast").forEach((t) => t.remove());
@@ -182,13 +165,20 @@ function toast(text) {
 }
 const STATE_COLOR = { cleared: "var(--cleared)", frontier: "var(--frontier)", claimed: "var(--claimed)", held: "var(--held)", blocked: "var(--blocked)" };
 const STATE_WORD = { cleared: "cleared", frontier: "frontier", claimed: "under way", held: "your move", blocked: "blocked" };
+const combPath = (name) => (name === "nix" ? "/nix" : `/datacombs/${name}`);
+// What the combs every node has are for (this prototype's own; any other comb is the user's).
+const COMB_ABOUT = {
+  nix: "The running system: its flake, machine.json (the packages the shell runs, each pinned by sha256) and the views, this one included. A change to machine.json is a switch.",
+  session: "pi's conversation: transcript.json, committed once per turn, so what was said sits in the same kind of history as what changed.",
+  workspace: "pi's working directory: where it writes unless told otherwise.",
+};
 
 // ---------- state the host keeps for us ----------
-const S = Object.assign({ project: null, ticket: null, player: "florek", cams: {}, sheet: true }, ue.state || {});
+const S = Object.assign({ sel: null, cam: null, player: "florek", sheet: true }, ue.state || {});
 let saveTimer = 0;
 function save() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => ue.setState && ue.setState({ project: S.project, ticket: S.ticket, player: S.player, cams: S.cams, sheet: S.sheet }), 250);
+  saveTimer = setTimeout(() => ue.setState && ue.setState({ sel: S.sel, cam: S.cam, player: S.player, sheet: S.sheet }), 250);
 }
 
 // ---------- WayQuest's world crate (wasm) ----------
@@ -230,7 +220,12 @@ const SPR = {
   unknown: [[rogue(19), 0, 0]],
   hall: [[town(72), -1, 0], [town(85), 0, 0], [town(75), 1, 0], [town(64), -1, 1], [town(65), 0, 1], [town(66), 1, 1], [town(52), -1, 2], [town(53), 0, 2], [town(54), 1, 2], [rogue(50), -2, 0.6], [rogue(50), 2, 0.6]],
   cottage: [[town(84), -1, 0], [town(86), 0, 0], [town(48), -1, 1], [town(50), 0, 1], [rogue(50), -2, 0.6]],
+  // The buildings of combs without a map.
+  keep: [[town(108), -1, 0], [town(112), 0, 0], [town(110), 1, 0], [town(96), -1, 1], [town(97), 0, 1], [town(98), 1, 1], [rogue(50), -2, 0.6], [rogue(50), 2, 0.6]],
+  redhouse: [[town(84), -0.5, 0], [town(85), 0.5, 0], [town(52), -0.5, 1], [town(54), 0.5, 1]],
+  stonehouse: [[town(88), -0.5, 0], [town(89), 0.5, 0], [town(48), -0.5, 1], [town(50), 0.5, 1]],
 };
+const BUILDING = { nix: "keep", session: "redhouse", workspace: "stonehouse" };
 const FIRE = [rogue(470), rogue(471)];
 const MONSTERS = [108, 110, 120, 121, 122, 123, 124].map(dungeon);
 const EXPLORERS = [85, 86, 88, 97, 98, 99, 100, 112].map(dungeon);
@@ -249,6 +244,45 @@ const GRASS_CELLS = [5, 62], WOOD = 119;
 const G = { GRASS: 0, CAMP: 8, ROUGH: 28, WATER: 48, WATER2: 68 };
 const R = { DIRT: 0, COBBLE: 16, BRIDGE_EW: 32, BRIDGE_NS: 33 };
 
+// Biomes: a comb's land. Green pixels (grass, shores, leaves) are moved to the biome's colour; some biomes
+// also grow their own plants from the same sheet.
+const BIOMES = {
+  meadow: { label: "meadow", swatch: "#7ec850" },
+  autumn: { label: "autumn", swatch: "#d9a441", hue: 40, sat: 0.9, lit: (l) => Math.min(0.85, l * 1.08) },
+  desert: { label: "desert", swatch: "#e2c27a", hue: 42, sat: 0.55, lit: (l) => Math.min(0.92, l * 1.12 + 0.04), plants: "desert" },
+  snow: { label: "snow", swatch: "#e8eef5", hue: 205, sat: 0.2, lit: (l) => 0.45 + l * 0.6, plants: "pines" },
+  bloom: { label: "bloom", swatch: "#b77ad8", hue: 285, sat: 0.7, lit: (l) => l },
+  marsh: { label: "marsh", swatch: "#4fa59a", hue: 168, sat: 0.55, lit: (l) => l * 0.82 },
+};
+const BIOME_ORDER = ["meadow", "autumn", "desert", "snow", "bloom", "marsh"];
+const BIOME_PREF = { nix: "snow", session: "bloom", workspace: "autumn" };
+function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2;
+  if (mx === mn) return [0, 0, l];
+  const d = mx - mn, s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+  const hh = mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return [hh * 60, s, l];
+}
+function hslToRgb(hh, s, l) {
+  const k = (n) => (n + hh / 30) % 12, a = s * Math.min(l, 1 - l);
+  const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
+}
+/** Recolour the green pixels of RGBA data in place for a biome. */
+function recolor(data, biome) {
+  const b = BIOMES[biome];
+  if (!b || b.hue == null) return data;
+  for (let i = 0; i < data.length; i += 4) {
+    if (!data[i + 3]) continue;
+    const [hh, s, l] = rgbToHsl(data[i], data[i + 1], data[i + 2]);
+    if (hh < 62 || hh > 165 || s < 0.12) continue;
+    const [r, g, bb] = hslToRgb((b.hue + (hh - 105) * 0.4 + 360) % 360, Math.min(1, s * b.sat), Math.max(0, Math.min(1, b.lit(l))));
+    data[i] = r; data[i + 1] = g; data[i + 2] = bb;
+  }
+  return data;
+}
+
 // The canvas's hashes, bit for bit, so decorations land where WayQuest puts them.
 const M64 = (1n << 64n) - 1n;
 function hash(a, b) {
@@ -258,9 +292,20 @@ function hash(a, b) {
   return z ^ (z >> 31n);
 }
 function nameHash(s) {
-  let h = 0xcbf29ce484222325n;
-  for (const b of new TextEncoder().encode(s)) h = ((h ^ BigInt(b)) * 0x100000001b3n) & M64;
-  return h;
+  let hh = 0xcbf29ce484222325n;
+  for (const b of new TextEncoder().encode(s)) hh = ((hh ^ BigInt(b)) * 0x100000001b3n) & M64;
+  return hh;
+}
+// Cheap 32-bit noise for the borders between biomes.
+function h32(x, y) {
+  let hh = (Math.imul(x, 374761393) + Math.imul(y, 668265263)) | 0;
+  hh = Math.imul(hh ^ (hh >>> 13), 1274126177);
+  return ((hh ^ (hh >>> 16)) >>> 0) / 4294967296;
+}
+function vnoise(x, y) {
+  const xi = Math.floor(x), yi = Math.floor(y), u0 = x - xi, v0 = y - yi, sm = (t) => t * t * (3 - 2 * t);
+  const a = h32(xi, yi), b = h32(xi + 1, yi), c = h32(xi, yi + 1), d = h32(xi + 1, yi + 1), u = sm(u0), v = sm(v0);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
 }
 
 async function loadImage(path) {
@@ -307,15 +352,17 @@ async function loadArt() {
     return [[nw, ne, sw, se], [n, n, s, s], [w, e, w, e], inner, [c, c, c, c]];
   }
   const grass = GRASS_CELLS.map(tileOf);
-  const quarters = [];
-  for (const t of grass) for (let q = 0; q < 4; q++) quarters.push(quarter(t, q));
+  const quads = [];
+  for (const t of grass) for (let q = 0; q < 4; q++) quads.push(quarter(t, q));
   for (const area of [AREA.dirt, AREA.cobble]) for (const shape of areaTiles(area)) shape.forEach((t, q) => {
     const top = quarter(t, q), under = quarter(grass[0], q);
-    quarters.push(top.map((row, y) => row.map((p, x) => over(p, under[y][x]))));
+    quads.push(top.map((row, y) => row.map((p, x) => over(p, under[y][x]))));
   });
-  for (const shape of areaTiles(AREA.water)) shape.forEach((t, q) => quarters.push(quarter(t, q)));
+  for (const shape of areaTiles(AREA.water)) shape.forEach((t, q) => quads.push(quarter(t, q)));
   const deep = tileOf(0);
-  for (let q = 0; q < 4; q++) quarters.push(quarter(deep, q));
+  for (let q = 0; q < 4; q++) quads.push(quarter(deep, q));
+  // Each quarter as 8 rows of 32 bytes, ready to copy into ImageData.
+  const quarters = quads.map((qd) => { const a = new Uint8ClampedArray(256); qd.forEach((row, y) => row.forEach((p, x) => a.set(p, (y * 8 + x) * 4))); return a; });
 
   // Road tiles: dirt and cobble by connection mask (1 N, 2 E, 4 S, 8 W), then plank bridges.
   const roadTiles = [];
@@ -345,7 +392,7 @@ async function loadArt() {
   const rimg = new ImageData(roads.width, 16);
   roadTiles.forEach((t, k) => { for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) rimg.data.set(t[y][x], (y * roads.width + k * 16 + x) * 4); });
   roads.getContext("2d").putImageData(rimg, 0, 0);
-  return { sheets, quarters, roads, tinted: new Map() };
+  return { sheets, quarters, biomeQuarters: new Map(), roads, tinted: new Map() };
 }
 
 function qshape(v, hz, d) {
@@ -354,23 +401,37 @@ function qshape(v, hz, d) {
   if (v && !hz) return 2; // vertical edge
   return d ? 4 : 3; // full, or inner corner
 }
+function quartersFor(biome) {
+  if (!BIOMES[biome] || BIOMES[biome].hue == null) return art.quarters;
+  let q = art.biomeQuarters.get(biome);
+  if (!q) art.biomeQuarters.set(biome, (q = art.quarters.map((a) => recolor(new Uint8ClampedArray(a), biome))));
+  return q;
+}
 
-/** A sprite, optionally multiplied by a colour, as a 16×16 canvas (cached). */
-function spriteCanvas(spr, tint) {
-  const key = `${spr[0]}:${spr[1]}:${tint || ""}`;
+/** A sprite, optionally recoloured for a biome and multiplied by a colour, as a 16×16 canvas (cached). */
+function spriteCanvas(spr, tint, biome) {
+  const key = `${spr[0]}:${spr[1]}:${tint || ""}:${biome || ""}`;
   let c = art.tinted.get(key);
   if (c) return c;
   const sh = art.sheets[spr[0]];
   c = document.createElement("canvas");
   c.width = c.height = 16;
-  const x = c.getContext("2d");
+  const x = c.getContext("2d", { willReadFrequently: !!biome });
   x.drawImage(sh.img, (spr[1] % sh.cols) * 17, Math.floor(spr[1] / sh.cols) * 17, 16, 16, 0, 0, 16, 16);
+  if (biome && BIOMES[biome] && BIOMES[biome].hue != null) {
+    const img = x.getImageData(0, 0, 16, 16);
+    recolor(img.data, biome);
+    x.putImageData(img, 0, 0);
+  }
   if (tint) {
+    const src = document.createElement("canvas");
+    src.width = src.height = 16;
+    src.getContext("2d").drawImage(c, 0, 0);
     x.globalCompositeOperation = "multiply";
     x.fillStyle = tint;
     x.fillRect(0, 0, 16, 16);
     x.globalCompositeOperation = "destination-in";
-    x.drawImage(sh.img, (spr[1] % sh.cols) * 17, Math.floor(spr[1] / sh.cols) * 17, 16, 16, 0, 0, 16, 16);
+    x.drawImage(src, 0, 0);
   }
   art.tinted.set(key, c);
   return c;
@@ -382,7 +443,7 @@ function drawSpr(ctx, spr, cx, cy, opt) {
   if (o.alpha != null) ctx.globalAlpha *= o.alpha;
   ctx.translate(cx, cy);
   if (o.rot) ctx.rotate(o.rot);
-  ctx.drawImage(spriteCanvas(spr, o.tint), -8 * s, -8 * s, 16 * s, 16 * s);
+  ctx.drawImage(spriteCanvas(spr, o.tint, o.biome), -8 * s, -8 * s, 16 * s, 16 * s);
   ctx.restore();
 }
 function blob(ctx, x, y, r, rgb, a) {
@@ -402,206 +463,14 @@ function ring(ctx, x, y, rx, ry, rgb, a) {
   ctx.restore();
 }
 
-// ---------- the static layer of one overworld (16 px per tile, the art's own size) ----------
-const STRUCT_TINT = { cleared: "rgb(148,148,158)", blocked: "rgb(23,23,36)" };
-function buildLayer(p) {
-  const m = p.model, T = m.terrain;
-  const [ox, oy] = T.origin, W = T.width, H = T.height;
-  const at = (x, y) => { const c = x - ox, r = y - oy; return c < 0 || r < 0 || c >= W || r >= H ? null : T.rows[r][c]; };
-  const P = (x, y) => [(x - ox) * 16 + 8, (y - oy) * 16 + 8];
-  const cv = document.createElement("canvas");
-  cv.width = W * 16; cv.height = H * 16;
-  const ctx = cv.getContext("2d");
-  ctx.imageSmoothingEnabled = false;
-
-  // Ground: four 8 px quarters a tile, each following the neighbours that touch its corner.
-  const img = ctx.createImageData(W * 16, H * 16);
-  const QD = [[-1, -1], [1, -1], [-1, 1], [1, 1]];
-  for (let r = 0; r < H; r++) for (let c = 0; c < W; c++) {
-    const x = ox + c, y = oy + r, g = at(x, y) || ".", hh = hash(x, y);
-    for (let q = 0; q < 4; q++) {
-      const [dx, dy] = QD[q];
-      const shape = (is) => qshape(is(at(x, y + dy)), is(at(x + dx, y)), is(at(x + dx, y + dy)));
-      let idx;
-      if (g === "~") { const s = shape((v) => v == null || v === "~"); idx = s === 4 && hh % 3n === 0n ? G.WATER2 + q : G.WATER + s * 4 + q; }
-      else if (g === "c") idx = G.CAMP + shape((v) => v === "c") * 4 + q;
-      else if (g === "r") idx = G.ROUGH + shape((v) => v === "r") * 4 + q;
-      else idx = G.GRASS + (hh % 4n === 0n ? 4 : 0) + q;
-      const quad = art.quarters[idx], bx = c * 16 + (q % 2) * 8, by = r * 16 + (q >> 1) * 8;
-      for (let yy = 0; yy < 8; yy++) for (let xx = 0; xx < 8; xx++) img.data.set(quad[yy][xx], ((by + yy) * W * 16 + bx + xx) * 4);
-    }
-  }
-  ctx.putImageData(img, 0, 0);
-
-  // Roads: each tile's connections come from the paths' own steps; a straight crossing is a bridge.
-  const key = (x, y) => `${x},${y}`;
-  const cells = new Map();
-  const cell = (x, y) => { const k = key(x, y); let c = cells.get(k); if (!c) cells.set(k, (c = { x, y, mask: 0, travelled: false, straight: true, axes: 0 })); return c; };
-  const dirBit = (a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1]; return dx === 0 && dy === -1 ? 1 : dx === 1 && dy === 0 ? 2 : dx === 0 && dy === 1 ? 4 : dx === -1 && dy === 0 ? 8 : 0; };
-  for (const road of m.roads) {
-    const n = road.path.length;
-    road.path.forEach(([x, y], k) => {
-      const c = cell(x, y);
-      c.travelled = c.travelled || road.travelled;
-      if (k === 0 || k === n - 1) { c.straight = false; return; }
-      const a = road.path[k - 1], b = road.path[k + 1];
-      if (a[0] === b[0]) c.axes |= 2; else if (a[1] === b[1]) c.axes |= 1; else c.straight = false;
-    });
-    for (let k = 1; k < n; k++) { const a = road.path[k - 1], b = road.path[k]; cell(a[0], a[1]).mask |= dirBit(a, b); cell(b[0], b[1]).mask |= dirBit(b, a); }
-  }
-  const roadAt = (i, x, y, alpha) => { const [px, py] = P(x, y); ctx.globalAlpha = alpha; ctx.drawImage(art.roads, i * 16, 0, 16, 16, px - 8, py - 8, 16, 16); ctx.globalAlpha = 1; };
-  for (const c of cells.values()) {
-    const g = at(c.x, c.y), a = c.travelled ? 1 : 0.62;
-    if (g === "~") roadAt(c.mask & 0b1010 ? R.BRIDGE_EW : R.BRIDGE_NS, c.x, c.y, a);
-    else if (c.straight && c.axes === 3) { roadAt(R.DIRT + 0b1010, c.x, c.y, a); roadAt(R.BRIDGE_NS, c.x, c.y, a); }
-    else roadAt((g === "r" ? R.COBBLE : R.DIRT) + c.mask, c.x, c.y, a);
-  }
-
-  // Decorations, row by row; tall trees only where their canopy covers nothing that matters.
-  const covered = new Set(cells.keys());
-  const block = (pos, w, up) => { for (let dy = -up; dy <= 0; dy++) for (let dx = -w; dx <= w; dx++) covered.add(key(pos[0] + dx, pos[1] + dy)); };
-  m.encounters.forEach((e) => block(e.pos, 1, 1));
-  block(m.start.pos, 2, 2);
-  block(m.destination.pos, 2, 3);
-  for (let r = 0; r < H; r++) for (let c = 0; c < W; c++) {
-    const x = ox + c, y = oy + r, g = at(x, y);
-    if (!g || !"To,:".includes(g)) continue;
-    const hh = hash(x * 31, y * 17), pick = (n) => Number((hh >> 8n) % BigInt(n));
-    const [px, py] = P(x, y);
-    if (g === "T") {
-      const above = at(x, y - 1), open = !covered.has(key(x, y - 1)) && above != null && above !== "~", autumn = hh % 13n === 0n;
-      if (open) { const [top, trunk] = autumn ? TALL_AUTUMN[pick(2)] : TALL[pick(TALL.length)]; drawSpr(ctx, trunk, px, py); drawSpr(ctx, top, px, py - 15); }
-      else drawSpr(ctx, autumn ? SMALL_AUTUMN[pick(2)] : SMALL[pick(SMALL.length)], px, py);
-    } else if (g === "o") drawSpr(ctx, ROCKS[pick(ROCKS.length)], px, py);
-    else if (g === "," && hh % 5n < 3n) drawSpr(ctx, FLOWERS[pick(FLOWERS.length)], px, py);
-    else if (g === ":" && hh % 7n === 0n) drawSpr(ctx, WHITE_FLOWER, px, py);
-  }
-
-  // Encounters and the two landmarks, back to front.
-  const things = [
-    ...m.encounters.map((e) => ({ y: e.pos[1], draw: () => drawEncounterStatic(ctx, e, P(e.pos[0], e.pos[1])) })),
-    { y: m.start.pos[1], draw: () => { const [x, y] = P(...m.start.pos); SPR.cottage.forEach(([s, dx, dy]) => drawSpr(ctx, s, x + dx * 16, y - dy * 16)); } },
-    { y: m.destination.pos[1], draw: () => { const [x, y] = P(...m.destination.pos); SPR.hall.forEach(([s, dx, dy]) => drawSpr(ctx, s, x + dx * 16, y - dy * 16)); } },
-  ].sort((a, b) => a.y - b.y);
-  things.forEach((t) => t.draw());
-
-  // Fog: a dimmed bank with soft edges, and a cloud per Not-yet-specified entry.
-  if (m.fog.bank) {
-    const [fx, fy, fw, fh] = m.fog.bank, [x0, y0] = P(fx, fy);
-    ctx.fillStyle = "rgba(41,46,71,0.6)";
-    ctx.fillRect(x0 - 8, y0 - 8, fw * 16, fh * 16);
-    for (let row = fy; row < fy + fh; row++) for (const [col, dx] of [[fx, -0.4], [fx + fw - 1, 0.4]]) { const [bx, by] = P(col, row); blob(ctx, bx + dx * 16, by, 18, "41,46,71", 0.55); }
-  }
-  m.fog.patches.forEach((f) => {
-    const [x, y] = P(...f.pos);
-    for (const [dx, dy, r] of [[0, 0, 19], [-11, 3, 14], [11, 4, 15], [2, -6, 13]]) blob(ctx, x + dx, y + dy, r, "219,224,240", 0.55);
-  });
-  return { canvas: cv, P, ox, oy };
-}
-
-function drawEncounterStatic(ctx, e, [x, y]) {
-  if (e.state === "claimed") blob(ctx, x, y - 3, 42, "255,199,77", 0.5);
-  if (e.state === "held") blob(ctx, x, y - 3, 42, "255,97,77", 0.5);
-  const rc = { claimed: ["255,204,77", 0.95], held: ["255,107,89", 0.95], frontier: ["166,255,140", 0.45] }[e.state];
-  if (rc) ring(ctx, x, y + 4, 27, 13.5, rc[0], rc[1]);
-  const tint = STRUCT_TINT[e.state];
-  (SPR[e.kind] || SPR.unknown).forEach(([s, dx, dy]) => drawSpr(ctx, s, x + dx * 16, y - dy * 16, { tint, alpha: e.state === "cleared" ? 0.9 : e.state === "blocked" ? 0.95 : 1 }));
-  if (e.state === "blocked") blob(ctx, x, y - 7, 21, "13,15,26", 0.8);
-}
-
-// ---------- drawing a whole overworld: the static layer plus what moves ----------
-function drawWorld(ctx, p, cam, t, wpx, hpx, dpr, opt) {
-  const L = p.layer, m = p.model, o = opt || {};
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = "#24361f";
-  ctx.fillRect(0, 0, wpx, hpx);
-  ctx.setTransform(dpr * cam.s, 0, 0, dpr * cam.s, dpr * cam.x, dpr * cam.y);
-  ctx.imageSmoothingEnabled = cam.s * dpr < 1;
-  ctx.drawImage(L.canvas, 0, 0);
-  ctx.imageSmoothingEnabled = false;
-  for (const e of m.encounters) {
-    const [x, y] = L.P(...e.pos);
-    if (o.selected === e.id) { blob(ctx, x, y - 4, 30, "255,224,115", 0.55 + 0.15 * Math.sin(t * 4)); }
-    if (e.kind === "grilling" && e.state !== "blocked") drawSpr(ctx, FIRE[Math.floor(t / 0.16) % 2], x, y, { tint: STRUCT_TINT[e.state] });
-    if (e.state === "claimed") {
-      const who = e.claimed_by || "someone";
-      const ex = EXPLORERS[Number(nameHash(who) % BigInt(EXPLORERS.length))];
-      drawSpr(ctx, ex, x - 13, y + 1 - Math.abs(Math.sin(t * 9 + e.id)) * 1.5);
-      drawSpr(ctx, TOOL, x - 7, y - 3, { scale: 0.7, rot: Math.sin(t * 9 + e.id) * 0.7 });
-    }
-    if (e.monster) drawSpr(ctx, MONSTERS[(e.id * 7 + 3) % MONSTERS.length], x + 8, y - 11 - Math.abs(Math.sin(t * 3.2 + e.id * 1.7)) * 2);
-  }
-  if (o.labels === false) return;
-  // Labels in screen space, so they stay readable at any zoom.
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  const S2 = (lx, ly) => [lx * cam.s + cam.x, ly * cam.s + cam.y];
-  ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  // Greedy: a label that would overlap one already drawn is skipped (labels are drawn most important first).
-  const placed = [];
-  const plate = (text, sx, sy, size, bg, fg, always) => {
-    ctx.font = `600 ${size}px system-ui, -apple-system, sans-serif`;
-    const w = ctx.measureText(text).width + 10, hh = size + 6;
-    const box = [sx - w / 2, sy - hh / 2, sx + w / 2, sy + hh / 2];
-    if (!always && placed.some((b) => box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1])) return;
-    placed.push(box);
-    ctx.fillStyle = bg; ctx.beginPath();
-    if (ctx.roundRect) ctx.roundRect(sx - w / 2, sy - hh / 2, w, hh, 4); else ctx.rect(sx - w / 2, sy - hh / 2, w, hh);
-    ctx.fill(); ctx.fillStyle = fg; ctx.fillText(text, sx, sy + 0.5);
-  };
-  const near = cam.s >= 1.1;
-  const sel = o.selected != null && m.encounters.find((e) => e.id === o.selected);
-  if (sel) { const [x, y] = L.P(...sel.pos); const [sx, sy] = S2(x, y - 27); plate(trim(`#${sel.id} ${sel.title}`, 56), sx, sy - 4 - (sel.state === "claimed" || sel.state === "held" ? 20 : 0), 12, "rgba(18,20,31,.85)", "#fff7e6", true); }
-  for (const e of m.encounters) {
-    if (e.state !== "claimed" && e.state !== "held") continue;
-    const [x, y] = L.P(...e.pos), [sx, sy] = S2(x, y - 27);
-    plate(e.state === "held" ? "your move" : `${e.claimed_by || "someone"} at work`, sx, sy - 4, 11, e.state === "held" ? "rgba(153,38,31,.92)" : "rgba(128,82,15,.92)", "#fff5db");
-  }
-  { const [dx, dy] = S2(...L.P(...m.destination.pos)); plate(trim(m.destination.title, 48), dx, dy + 15 * cam.s + 8, 11, "rgba(18,20,31,.7)", "#ffe6a8"); }
-  { const [sx, sy] = S2(...L.P(...m.start.pos)); plate("Start", sx, sy + 15 * cam.s + 8, 11, "rgba(18,20,31,.6)", "#fff7e6"); }
-  for (const e of m.encounters) {
-    if (!near && o.selected !== e.id) continue;
-    const [x, y] = L.P(...e.pos), [sx, sy] = S2(x, y + 12);
-    plate(`#${e.id}`, sx, sy + 4, 10, e.state === "cleared" ? "rgba(18,20,31,.35)" : "rgba(18,20,31,.62)", e.state === "cleared" ? "rgba(255,247,230,.55)" : "#fff7e6");
-  }
-  m.fog.patches.forEach((f) => { const [x, y] = L.P(...f.pos); const [sx, sy] = S2(x, y + 15); plate(f.name || "?", sx, sy + 4, 10, "rgba(18,20,31,.55)", "#e9ecf5"); });
-}
-const trim = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
-
-/** The charted region in layer px: encounters, start, destination, fog. */
-function bounds(p) {
-  const L = p.layer, m = p.model;
-  const pts = [m.start.pos, m.destination.pos, ...m.encounters.map((e) => e.pos)];
-  if (m.fog.bank) { const [x, y, w, hh] = m.fog.bank; pts.push([x, y], [x + w - 1, y + hh - 1]); }
-  let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
-  for (const q of pts) { const [x, y] = L.P(...q); x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); }
-  return [x0 - 40, y0 - 56, x1 + 40, y1 + 36];
-}
-function fitCam(p, w, hpx, whole) {
-  const [x0, y0, x1, y1] = bounds(p);
-  const sw = w / (x1 - x0), sh = hpx / (y1 - y0);
-  // The whole charted region when it fits well; on a tall, narrow screen, fill the height and pan instead.
-  const s = whole ? Math.min(sw, sh) : Math.min(Math.max(sw, sh), 1.8 * Math.min(sw, sh));
-  // Centre on where the work is (the frontier, what is under way, what needs you), else the whole region.
-  const live = p.model.encounters.filter((e) => e.state !== "cleared" && e.state !== "blocked");
-  let cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
-  if (s * (x1 - x0) > w * 1.05 && live.length) cx = live.reduce((n, e) => n + p.layer.P(...e.pos)[0], 0) / live.length;
-  if (s * (y1 - y0) > hpx * 1.05 && live.length) cy = live.reduce((n, e) => n + p.layer.P(...e.pos)[1], 0) / live.length;
-  return clampCam(p, { s, x: w / 2 - cx * s, y: hpx / 2 - cy * s }, w, hpx);
-}
-/** Keep the terrain under the whole viewport where it is big enough to cover it. */
-function clampCam(p, c, w, hpx) {
-  const W = p.layer.canvas.width * c.s, H = p.layer.canvas.height * c.s;
-  const x = W >= w ? Math.min(0, Math.max(w - W, c.x)) : c.x, y = H >= hpx ? Math.min(0, Math.max(hpx - H, c.y)) : c.y;
-  return { s: c.s, x, y };
-}
-
-// ---------- datacombs → projects ----------
+// ---------- datacombs → regions ----------
+// A region is one map's overworld (its comb has a wayfinder map) or one comb's land (it has none).
 let world, art;
-const projects = new Map(); // `${comb}/${effort}` → project
-let uncharted = []; // comb summaries without a map
+let regions = []; // in drawing order
+const byKey = new Map();
 const combHeads = new Map(); // comb → head we scanned
-let feed = null; // recent changes across every project
-const combPath = (name) => (name === "nix" ? "/nix" : `/datacombs/${name}`);
+const scanned = new Map(); // comb → [found maps]
+let feed = null; // recent changes across every map
 
 async function scanComb(c) {
   let files = [];
@@ -613,400 +482,420 @@ async function scanComb(c) {
     const names = files.map(([p]) => p).filter((p) => p.startsWith(pre) && /^\d[^/]*\.md$/.test(p.slice(pre.length))).map((p) => p.slice(pre.length)).sort();
     const map = await ue.read(`${dir}/map.md`);
     const tickets = await Promise.all(names.map(async (n) => [n, await ue.read(`${dir}/issues/${n}`)]));
-    found.push({ key: `${c.name}/${eff}`, comb: c.name, effort: eff, dir, files: { id: eff, map, tickets }, combInfo: c });
+    found.push({ effort: eff, files: { id: eff, map, tickets } });
   }
   return found;
 }
 
-function build(p) {
-  const input = JSON.stringify({ ...p.files, player: S.player, at: new Date().toISOString() });
-  p.model = JSON.parse(world.overworld(input));
-  p.tracker = JSON.parse(world.tracker(JSON.stringify(p.files)));
-  p.byId = new Map(p.tracker.tickets.map((t) => [t.id, t]));
-  p.fileOf = new Map(p.files.tickets.map(([n]) => [parseInt(n, 10), n]));
-  const enc = p.model.encounters;
-  const count = (f) => enc.filter(f).length;
-  p.sum = {
+/** A map region: WayQuest's model of the map, plus what the panels need. */
+function mapRegion(c, f) {
+  const r = { key: `${c.name}/${f.effort}`, kind: "map", comb: c.name, effort: f.effort, files: f.files, combInfo: c };
+  r.model = JSON.parse(world.overworld(JSON.stringify({ ...f.files, player: S.player, at: new Date().toISOString() })));
+  r.tracker = JSON.parse(world.tracker(JSON.stringify(f.files)));
+  r.byId = new Map(r.tracker.tickets.map((t) => [t.id, t]));
+  r.fileOf = new Map(f.files.tickets.map(([n]) => [parseInt(n, 10), n]));
+  const enc = r.model.encounters, count = (fn) => enc.filter(fn).length;
+  r.sum = {
     total: enc.length,
     cleared: count((e) => e.state === "cleared"),
     frontier: count((e) => e.state === "frontier"),
     underway: count((e) => e.state === "claimed" || e.state === "held"),
     blocked: count((e) => e.state === "blocked"),
     beacons: count((e) => e.monster),
-    fog: p.model.fog.patches.length,
+    fog: r.model.fog.patches.length,
   };
-  p.layer = buildLayer(p);
-  p.activity = null;
+  r.title = r.model.map.title || f.effort;
+  const pts = [r.model.start.pos, r.model.destination.pos, ...enc.map((e) => e.pos)];
+  if (r.model.fog.bank) { const [x, y, w, hh] = r.model.fog.bank; pts.push([x, y], [x + w - 1, y + hh - 1]); }
+  r.core = coreOf(pts, 3);
+  return r;
+}
+/** A comb without a map: land from WayQuest's terrain for an empty map seeded by the comb's name, and a building. */
+function combRegion(c) {
+  const r = { key: `comb:${c.name}`, kind: "comb", comb: c.name, combInfo: c, title: combPath(c.name) };
+  r.model = JSON.parse(world.overworld(JSON.stringify({ id: `comb:${c.name}`, map: `# ${c.name}\n`, tickets: [], player: S.player, at: "" })));
+  // The building stands mid-island (on the destination's cleared ground if the middle is water).
+  const T = r.model.terrain, mid = T.rows[-T.origin[1]] && T.rows[-T.origin[1]][-T.origin[0]];
+  r.site = mid && mid !== "~" ? [0, 0] : r.model.destination.pos;
+  r.core = [-9, -3, 9, 3];
+  return r;
+}
+function coreOf(pts, pad) {
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  return [Math.min(...xs) - pad, Math.min(...ys) - pad - 2, Math.max(...xs) + pad, Math.max(...ys) + pad];
 }
 
 async function scanAll() {
-  const combs = ue.combs || [];
-  const live = new Set(combs.map((c) => c.name));
-  for (const k of [...projects.keys()]) if (!live.has(projects.get(k).comb)) projects.delete(k);
-  const un = [];
+  const combs = (ue.combs || []).slice().sort((a, b) => a.name.localeCompare(b.name));
   for (const c of combs) {
-    if (combHeads.get(c.name) !== c.head) {
-      const found = await scanComb(c);
-      for (const k of [...projects.keys()]) if (projects.get(k).comb === c.name) projects.delete(k);
-      for (const p of found) { build(p); projects.set(p.key, p); }
-      combHeads.set(c.name, c.head);
-    } else for (const p of projects.values()) if (p.comb === c.name) p.combInfo = c;
-    if (![...projects.values()].some((p) => p.comb === c.name)) un.push(c);
+    if (combHeads.get(c.name) === c.head && scanned.has(c.name)) continue;
+    scanned.set(c.name, await scanComb(c));
+    combHeads.set(c.name, c.head);
   }
-  uncharted = un;
+  for (const k of [...scanned.keys()]) if (!combs.some((c) => c.name === k)) { scanned.delete(k); combHeads.delete(k); }
+  // Charted combs first, then the rest; both by name, so places stay put as entries land.
+  const next = [];
+  for (const c of combs) for (const f of scanned.get(c.name)) next.push(mapRegion(c, f));
+  for (const c of combs) if (!scanned.get(c.name).length) next.push(combRegion(c));
+  assignBiomes(next);
+  packRegions(next);
+  regions = next;
+  byKey.clear();
+  regions.forEach((r) => byKey.set(r.key, r));
+  buildLayer();
 }
 
-// ---------- history → what changed, and who ----------
-function filesOf(id, m) {
-  const map = m.get("map.md");
-  if (map == null) return null;
-  return { id, map, tickets: [...m].filter(([k]) => /^issues\/\d[^/]*\.md$/.test(k)).map(([k, v]) => [k.slice(7), v]).sort() };
-}
-function diffStates(p, prev, next, entry) {
-  const a = filesOf(p.effort, prev), b = filesOf(p.effort, next);
-  if (!b) return [{ what: "map_removed", text: "map removed", parts: [{ text: "map removed" }] }];
-  if (!a) return [{ what: "charted", text: `charted: ${b.tickets.length} tickets`, parts: [{ text: `charted: ${b.tickets.length} tickets` }] }];
-  const out = JSON.parse(world.changes(JSON.stringify({ prev: a, next: b, player: S.player })));
-  if (out.length) return out;
-  // Nothing on the overworld changed: say which texts were edited.
-  const pre = `.scratch/${p.effort}/`;
-  const touched = [...entry.summary.added, ...entry.summary.modified, ...entry.summary.removed].filter((x) => x.startsWith(pre)).map((x) => x.slice(pre.length));
-  const ids = [...new Set(touched.map((x) => /^issues\/(\d+)/.exec(x)).filter(Boolean).map((m) => parseInt(m[1], 10)))];
-  const parts = [];
-  if (touched.includes("map.md")) parts.push({ text: "map notes edited" });
-  ids.forEach((id, i) => { if (parts.length) parts.push({ text: i ? ", " : "; " }); parts.push({ ticket: id }); parts.push({ text: " edited" }); });
-  return [{ what: "edited", text: "", parts: parts.length ? parts : [{ text: "edited" }] }];
-}
-
-async function activityOf(p, limit) {
-  if (p.activity && (p.activity.length >= limit || p.activityDone)) return p.activity;
-  const log = await ue.log(p.comb);
-  const pre = `.scratch/${p.effort}/`;
-  const touches = (e) => e.summary && [...e.summary.added, ...e.summary.modified, ...e.summary.removed].some((x) => x.startsWith(pre));
-  let state = new Map([["map.md", p.files.map], ...p.files.tickets.map(([n, t]) => [`issues/${n}`, t])]);
-  const out = [];
-  let done = true;
-  for (const e of log) {
-    if (!touches(e)) continue;
-    if (out.length >= limit) { done = false; break; }
-    const prev = new Map(state), rel = (x) => x.slice(pre.length);
-    for (const x of e.summary.added) if (x.startsWith(pre)) prev.delete(rel(x));
-    for (const x of [...e.summary.modified, ...e.summary.removed]) if (x.startsWith(pre)) {
-      if (!e.parent) { prev.delete(rel(x)); continue; }
-      try { prev.set(rel(x), await ue.read(`/datacombs/${p.comb}@${e.parent}/${x}`)); } catch { prev.delete(rel(x)); }
-    }
-    out.push({ entry: e, changes: diffStates(p, prev, state, e) });
-    state = prev;
+/** One biome per comb: the node's own combs have theirs; the rest are picked by name, different from each other while biomes last. */
+function assignBiomes(rs) {
+  const combs = [...new Set(rs.map((r) => r.comb))];
+  const of = new Map(), used = new Set();
+  for (const name of combs) if (BIOME_PREF[name]) { of.set(name, BIOME_PREF[name]); used.add(BIOME_PREF[name]); }
+  for (const name of combs) {
+    if (of.has(name)) continue;
+    let i = Number(nameHash(name) % BigInt(BIOME_ORDER.length));
+    for (let k = 0; k < BIOME_ORDER.length && used.has(BIOME_ORDER[i]); k++) i = (i + 1) % BIOME_ORDER.length;
+    of.set(name, BIOME_ORDER[i]); used.add(BIOME_ORDER[i]);
+    if (used.size >= BIOME_ORDER.length) used.clear();
   }
-  p.activity = out;
-  p.activityDone = done;
-  return out;
+  rs.forEach((r) => (r.biome = of.get(r.comb)));
 }
 
-/** Who made a history entry, in a few words. */
-function who(e) {
-  const a = e.author || {};
-  const model = a.model ? ` (${a.model})` : "";
-  switch (e.kind) {
-    case "tool_call": return `${a.harness || "session"}${model} · ${e.tool_name || "tool"}`;
-    case "turn": return `${a.harness || "session"}${model} · turn`;
-    case "external": return a.harness === "system" ? "the node" : "you, outside a tool call";
-    case "pull": return a.harness && a.harness !== "git" ? `${a.harness}${model} · via git` : a.principal && a.principal !== "user" ? `${a.principal} · via git` : "pulled from git";
-    case "rollback": return "rollback";
-    case "genesis": return "created";
-    default: return e.kind;
+/** Rows of regions, left to right: each region's core gets a slot; their land overlaps and meets in between. */
+const GAP = 8;
+function packRegions(rs) {
+  const area = rs.reduce((n, r) => n + (r.core[2] - r.core[0] + GAP) * (r.core[3] - r.core[1] + GAP), 0);
+  const target = Math.max(...rs.map((r) => r.core[2] - r.core[0]), Math.sqrt(area * 1.7));
+  let x = 0, y = 0, rowH = 0, row = [];
+  const flush = () => { for (const r of row) r.off[1] += Math.floor((rowH - (r.core[3] - r.core[1])) / 2); y += rowH + GAP; x = 0; rowH = 0; row = []; };
+  for (const r of rs) {
+    const w = r.core[2] - r.core[0], hh = r.core[3] - r.core[1];
+    if (x > 0 && x + w > target) flush();
+    r.off = [x - r.core[0], y - r.core[1]];
+    row.push(r);
+    x += w + GAP;
+    rowH = Math.max(rowH, hh);
   }
+  flush();
 }
 
-async function buildFeed() {
-  const rows = [];
-  for (const p of projects.values()) {
-    const act = await activityOf(p, 8);
-    for (const a of act) for (const c of a.changes) rows.push({ p, entry: a.entry, change: c });
+// ---------- the world layer: 16 px a tile, in chunks so a big world stays under canvas limits ----------
+const CHUNK = 64;
+let L = null;
+function buildLayer() {
+  const t0 = performance.now();
+  const BORDER = 11;
+  let wx0 = Infinity, wy0 = Infinity, wx1 = -Infinity, wy1 = -Infinity;
+  for (const r of regions) { const [a, b, c, d] = r.core; wx0 = Math.min(wx0, a + r.off[0] - BORDER); wy0 = Math.min(wy0, b + r.off[1] - BORDER); wx1 = Math.max(wx1, c + r.off[0] + BORDER); wy1 = Math.max(wy1, d + r.off[1] + BORDER); }
+  if (!regions.length) { wx0 = wy0 = 0; wx1 = wy1 = 20; }
+  const W = wx1 - wx0 + 1, H = wy1 - wy0 + 1;
+  // Which region owns each tile: the nearest core, each region with its own noise, among the regions whose land
+  // reaches it. Far enough from every core the land gives way to sea, along a noisy coast.
+  const owner = new Int16Array(W * H).fill(-1), nearest = new Int16Array(W * H).fill(0);
+  for (let ty = 0; ty < H; ty++) for (let tx = 0; tx < W; tx++) {
+    const x = tx + wx0, y = ty + wy0;
+    let best = -1, bd = Infinity, raw = Infinity, near = 0, nd = Infinity;
+    regions.forEach((r, i) => {
+      const T = r.model.terrain, mx = x - r.off[0], my = y - r.off[1], [a, b, c, d] = r.core;
+      const dx = Math.max(a - mx, 0, mx - c), dy = Math.max(b - my, 0, my - d), dist = Math.hypot(dx, dy);
+      // Distance to the core, bent by this region's own noise: where two regions meet, the border wanders.
+      const dn = dist ? dist + (vnoise(x / 6 + i * 13.7, y / 6 - i * 7.3) - 0.5) * 6 + h32(x + i, y) * 0.6 : -1;
+      if (dn < nd) { nd = dn; near = i; }
+      if (dn < bd) { bd = dn; best = i; raw = dist; }
+    });
+    nearest[ty * W + tx] = near;
+    // Land reaches a few tiles past its core (never past the terrain WayQuest made for it); beyond is sea.
+    const reach = best >= 0 && raw <= (regions[best].kind === "map" ? 4.5 : 3.5) + vnoise(x / 4 + 91, y / 4 + 17) * 2.5;
+    if (reach) owner[ty * W + tx] = best;
   }
-  rows.sort((a, b) => b.entry.time - a.entry.time);
-  feed = rows.slice(0, 24);
-}
-
-function partsNode(p, parts, ticket) {
-  const out = [];
-  if (ticket != null) out.push(ticketLink(p, ticket), " ");
-  for (const part of parts) out.push(part.ticket != null ? ticketLink(p, part.ticket) : part.text);
-  return out;
-}
-function ticketLink(p, id) {
-  const t = p.byId.get(id);
-  return h("span", { class: "link", title: t ? t.title : `#${id}`, onClick: (ev) => { ev.stopPropagation(); openProject(p.key, id); } }, `#${id}`);
-}
-
-// ---------- the atlas ----------
-let screen = "atlas";
-function renderAtlas() {
-  screen = "atlas";
-  stopLoop();
-  const list = [...projects.values()].sort((a, b) => (b.combInfo.last?.time || 0) - (a.combInfo.last?.time || 0) || a.key.localeCompare(b.key));
-  const beacons = [];
-  for (const p of list) for (const e of p.model.encounters) if (e.monster) beacons.push({ p, e });
-  const sumOf = (k) => list.reduce((n, p) => n + p.sum[k], 0);
-  const totals = [["projects", list.length], ["need you", sumOf("beacons")], ["under way", sumOf("underway")], ["frontier", sumOf("frontier")], ["cleared", `${sumOf("cleared")}/${sumOf("total")}`]];
-  const cards = list.map((p) => {
-    const thumb = h("canvas", { class: "thumb" });
-    const c = p.combInfo, r = c.remote;
-    const s = p.sum, seg = (n, color) => (n ? h("i", { style: `width:${(100 * n) / Math.max(1, s.total)}%;background:${color}` }) : null);
-    const card = h("div", { class: "card", onClick: () => openProject(p.key) }, thumb,
-      h("div", { class: "body" },
-        h("div", { class: "top" }, h("span", { class: "mono muted" }, `${combPath(p.comb)}/.scratch/${p.effort}`),
-          r ? h("span", { class: `pill git ${r.state === "synced" ? "ok" : r.state === "error" || r.state === "diverged" ? "bad" : ""}`, title: `${r.url} ${r.branch}` }, `git · ${r.state}`) : null),
-        h("div", { class: "title" }, p.model.map.title || p.effort),
-        h("div", { class: "dest" }, firstLine(p.tracker.destination)),
-        h("div", { class: "bar", title: `${s.cleared} cleared · ${s.underway} under way · ${s.frontier} frontier · ${s.blocked} blocked` },
-          seg(s.cleared, "var(--cleared)"), seg(s.underway, "var(--claimed)"), seg(s.frontier, "var(--frontier)"), seg(s.blocked, "var(--blocked)")),
-        h("div", { class: "chips" },
-          h("span", { class: "chip" }, `${s.cleared}/${s.total} cleared`),
-          s.beacons ? h("span", { class: "chip", style: "border-color:rgba(255,107,89,.5)" }, h("i", { class: "dot", style: "background:var(--held)" }), `${s.beacons} need you`) : null,
-          s.underway ? h("span", { class: "chip" }, h("i", { class: "dot", style: "background:var(--claimed)" }), `${s.underway} under way`) : null,
-          s.frontier ? h("span", { class: "chip" }, h("i", { class: "dot", style: "background:var(--frontier)" }), `${s.frontier} frontier`) : null,
-          s.fog ? h("span", { class: "chip" }, `☁ ${s.fog} fog`) : null),
-        c.last ? h("div", { class: "last", title: c.last.message }, `${ago(c.last.time)} · ${who(c.last)} · ${c.last.message}`) : null));
-    requestAnimationFrame(() => paintThumb(thumb, p));
-    return card;
-  });
-  const feedNode = h("div", { class: "list feed" }, feed == null ? h("div", { class: "empty" }, "reading history…") : feed.length === 0 ? h("div", { class: "empty" }, "No changes yet.") :
-    feed.map(({ p, entry, change }) => h("div", { class: "row" },
-      h("span", { class: "when", title: new Date(entry.time).toLocaleString() }, ago(entry.time)),
-      h("div", { class: "what" }, h("span", { class: "mono muted" }, `${p.comb} `), ...partsNode(p, change.parts, change.ticket),
-        h("div", { class: "who" }, `${who(entry)} · ${entry.message.split("\n")[0]}`)))));
-  app.replaceChildren(h("div", { class: "atlas" },
-    h("header", {},
-      h("div", {}, h("div", { class: "brand" }, "Way", h("span", {}, "Quest")),
-        h("div", { class: "sub" }, `Every project in datacombs · ${(ue.combs || []).length} combs, ${list.length} wayfinder ${list.length === 1 ? "map" : "maps"}`),
-        ue.view && ue.view.note ? h("div", { class: "sub", style: "color:var(--accent)" }, ue.view.note) : null),
-      h("div", { class: "totals" }, totals.map(([l, v]) => h("div", { class: "total" }, h("div", { class: "v" }, String(v)), h("div", { class: "l" }, l))))),
-    h("h2", {}, `Needs you · ${beacons.length}`),
-    beacons.length ? h("div", { class: "needs" }, beacons.map(({ p, e }) => h("div", { class: "row", onClick: () => openProject(p.key, e.id) },
-      h("i", { class: "dot", style: `background:${e.state === "held" ? "var(--held)" : "#ff9a7a"}` }),
-      h("span", { class: "t" }, `#${e.id} ${e.title}`),
-      h("span", { class: "pill" }, e.state === "held" ? "your move" : e.kind),
-      h("span", { class: "proj" }, p.comb)))) : h("div", { class: "list" }, h("div", { class: "empty" }, "Nothing is waiting on you.")),
-    h("h2", {}, `Projects · ${list.length}`),
-    list.length ? h("div", { class: "cards" }, cards) : h("div", { class: "list" }, h("div", { class: "empty" },
-      "No comb in datacombs carries a wayfinder map yet. A map is ", h("code", {}, ".scratch/<effort>/map.md"), " with tickets in ", h("code", {}, "issues/NN-<slug>.md"),
-      ". Connect a comb to a git repository that has one (the Git button in the console), or ask pi to chart one.")),
-    h("h2", {}, `Uncharted combs · ${uncharted.length}`),
-    uncharted.length ? h("div", { class: "list" }, uncharted.map((c) => h("div", { class: "row", style: "cursor:default" },
-      h("span", { class: "mono", style: "min-width:110px" }, combPath(c.name)),
-      h("span", { class: "t muted small" }, `${c.entries} ${c.entries === 1 ? "entry" : "entries"} · ${c.files} files${c.last ? ` · ${ago(c.last.time)}: ${c.last.message}` : ""}`),
-      c.remote ? h("span", { class: "pill git" }, `git · ${c.remote.state}`) : null))) : h("div", { class: "list" }, h("div", { class: "empty" }, "Every comb is charted.")),
-    h("h2", {}, "Recent changes across datacombs"),
-    feedNode,
-    h("footer", { class: "settings" },
-      h("label", {}, "You are ", h("input", { value: S.player, title: "the designated human account: their claims are 'your move', and beacons are for them", onChange: (ev) => setPlayer(ev.target.value) })),
-      h("span", {}, `· overworlds by WayQuest's world crate · sprites by Kenney (CC0) · ${HERE}`))));
-  if (S.atlasScroll) window.scrollTo(0, S.atlasScroll);
-}
-const firstLine = (s) => (s || "").replace(/\s+/g, " ").trim();
-
-function paintThumb(canvas, p) {
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
-  const w = canvas.clientWidth, hpx = canvas.clientHeight;
-  if (!w || !hpx) return;
-  canvas.width = Math.round(w * dpr); canvas.height = Math.round(hpx * dpr);
-  drawWorld(canvas.getContext("2d"), p, fitCam(p, w, hpx, true), 0.3, w, hpx, dpr, { labels: false });
-}
-
-async function setPlayer(v) {
-  S.player = String(v || "").trim() || "florek";
-  save();
-  for (const p of projects.values()) build(p);
-  feed = null;
-  rerender();
-  await buildFeed();
-  rerender();
-}
-
-// ---------- one overworld ----------
-const canvas = h("canvas", {});
-const stage = h("div", { class: "stage" }, canvas,
-  h("div", { class: "legend" },
-    h("span", {}, h("i", { class: "dot", style: "background:var(--frontier)" }), "frontier"),
-    h("span", {}, h("i", { class: "dot", style: "background:var(--claimed)" }), "under way"),
-    h("span", {}, h("i", { class: "dot", style: "background:var(--held)" }), "your move / beacon"),
-    h("span", {}, h("i", { class: "dot", style: "background:var(--cleared)" }), "cleared"),
-    h("span", {}, h("i", { class: "dot", style: "background:var(--blocked)" }), "blocked")),
-  h("div", { class: "hud" },
-    h("button", { title: "zoom in", onClick: () => zoomBy(1.4) }, "+"),
-    h("button", { title: "zoom out", onClick: () => zoomBy(1 / 1.4) }, "−"),
-    h("button", { title: "show the whole map", onClick: () => { if (cur) { cam = fitCam(cur, canvas.clientWidth, canvas.clientHeight, true); saveCam(); } } }, "⤢")));
-let cur = null; // the open project
-let cam = null;
-let loop = 0;
-let panelEl = null;
-
-function openProject(key, ticket) {
-  const p = projects.get(key);
-  if (!p) return renderAtlas();
-  if (screen === "atlas") S.atlasScroll = window.scrollY;
-  S.project = key;
-  S.ticket = ticket != null ? ticket : null;
-  if (ticket != null) S.sheet = true;
-  save();
-  if (cur !== p) cam = S.cams[key] || null;
-  cur = p;
-  screen = "world";
-  renderWorld();
-  if (ticket != null) focusOn(ticket);
-}
-
-function renderWorld() {
-  const p = cur;
-  const s = p.sum;
-  panelEl = h("aside", { class: `panel${S.sheet ? "" : " collapsed"}` });
-  app.replaceChildren(h("div", { class: "world" },
-    h("div", { class: "wbar" },
-      h("button", { class: "back", onClick: () => { S.project = null; S.ticket = null; save(); renderAtlas(); } }, "‹ Atlas"),
-      h("div", { class: "name" }, h("b", {}, p.model.map.title || p.effort), h("span", { class: "muted mono" }, `  ${combPath(p.comb)}@${short(p.combInfo.head)}`)),
-      h("span", { class: "pill", title: "cleared / total" }, `${s.cleared}/${s.total}`),
-      s.beacons ? h("span", { class: "pill bad" }, `${s.beacons} need you`) : null),
-    stage, panelEl));
-  renderPanel();
-  requestAnimationFrame(resize);
-  startLoop();
-}
-
-function renderPanel() {
-  if (!panelEl || !cur) return;
-  const p = cur;
-  const t = S.ticket != null ? p.byId.get(S.ticket) : null;
-  const head = h("button", { class: "sheet-toggle", onClick: () => { S.sheet = !S.sheet; save(); panelEl.classList.toggle("collapsed", !S.sheet); requestAnimationFrame(resize); } },
-    h("span", {}, t ? `#${t.id} ${trim(t.title, 40)}` : `${p.sum.beacons} need you · ${p.sum.underway} under way · ${p.sum.frontier} frontier`), h("span", {}, S.sheet ? "▾" : "▴"));
-  const body = S.ticket === "destination" ? destinationPanel(p)
-    : typeof S.ticket === "string" && S.ticket.startsWith("fog:") ? fogPanel(p, parseInt(S.ticket.slice(4), 10))
-    : t ? ticketPanel(p, t) : overviewPanel(p);
-  panelEl.replaceChildren(head, h("div", { class: "content" }, body));
-}
-
-function encRow(p, e) {
-  return h("div", { class: "row", style: "cursor:pointer", onClick: () => select(e.id) },
-    h("i", { class: "dot", style: `background:${e.monster ? "var(--held)" : STATE_COLOR[e.state]}` }),
-    h("span", { class: "t" }, `#${e.id} ${e.title}`),
-    h("span", { class: "pill" }, e.state === "claimed" ? (e.claimed_by || "someone") : e.state === "held" ? "your move" : e.kind));
-}
-
-function overviewPanel(p) {
-  const enc = p.model.encounters;
-  const groups = [
-    ["Needs you", enc.filter((e) => e.monster), "Nothing is waiting on you here."],
-    ["Under way", enc.filter((e) => (e.state === "claimed" || e.state === "held") && !e.monster), null],
-    ["Frontier", enc.filter((e) => e.state === "frontier" && !e.monster), null],
-  ];
-  const act = h("div", {}, h("div", { class: "muted small" }, "reading history…"));
-  activityOf(p, 12).then((list) => {
-    if (cur !== p) return;
-    act.replaceChildren(...(list.length ? list.map(({ entry, changes }) => h("div", { class: "row", style: "flex-direction:column;gap:2px;align-items:stretch" },
-      changes.map((c) => h("div", {}, ...partsNode(p, c.parts, c.ticket))),
-      h("div", { class: "muted small" }, `${ago(entry.time)} · ${who(entry)} · `, h("span", { class: "mono" }, `@${short(entry.id)}`)))) : [h("div", { class: "muted small" }, "No history entries touch this map.")]));
-  }).catch((e) => act.replaceChildren(h("div", { class: "err" }, String(e.message || e))));
-  return [
-    h("h3", {}, p.model.map.title || p.effort),
-    h("div", { class: "md", html: md(p.tracker.destination, p) }),
-    h("div", { class: "chips", style: "margin:8px 0" },
-      h("span", { class: "chip" }, `${p.sum.cleared}/${p.sum.total} cleared`), h("span", { class: "chip" }, `${p.sum.blocked} blocked`), h("span", { class: "chip" }, `☁ ${p.sum.fog} fog`)),
-    ...groups.flatMap(([title, list, none]) => (list.length || none ? [h("h4", {}, `${title} · ${list.length}`), ...(list.length ? list.map((e) => encRow(p, e)) : [h("div", { class: "muted small" }, none)])] : [])),
-    h("h4", {}, "Recent changes"), act,
-    p.model.fog.patches.length ? h("h4", {}, `Fog · not yet specified · ${p.model.fog.patches.length}`) : null,
-    ...p.model.fog.patches.map((f, i) => h("div", { class: "row", style: "cursor:pointer", onClick: () => { S.ticket = `fog:${i}`; save(); renderPanel(); } }, h("span", {}, "☁"), h("span", { class: "t" }, f.name || trim(f.text, 60)))),
-  ];
-}
-
-function ticketPanel(p, t) {
-  const e = p.model.encounters.find((x) => x.id === t.id);
-  const file = p.fileOf.get(t.id);
-  const path = `${combPath(p.comb)}/.scratch/${p.effort}/issues/${file}`;
-  const input = h("input", { placeholder: e && e.monster ? "Answer, or ask pi to pick this up…" : "Ask pi about this ticket…" });
-  const send = () => {
-    const text = input.value.trim();
-    if (!text) return;
-    ue.prompt(`About "${t.title}" (${path}): ${text}`);
-    input.value = "";
-    toast((ue.view && ue.view.promptAck) || "Sent to pi in the console.");
+  const inside = (x, y) => x >= wx0 && y >= wy0 && x < wx0 + W && y < wy0 + H;
+  const own = (x, y) => (inside(x, y) ? owner[(y - wy0) * W + (x - wx0)] : -1);
+  const at = (x, y) => {
+    if (!inside(x, y)) return null;
+    const i = owner[(y - wy0) * W + (x - wx0)];
+    if (i < 0) return "~"; // the sea
+    const r = regions[i], T = r.model.terrain, row = T.rows[y - r.off[1] - T.origin[1]];
+    // Past the terrain WayQuest made for the map (a border wandering over): plain ground.
+    return (row && row[x - r.off[0] - T.origin[0]]) || ".";
   };
-  input.addEventListener("keydown", (ev) => { if (ev.key === "Enter") send(); });
-  return [
-    h("div", { class: "small" }, h("span", { class: "link", onClick: () => { S.ticket = null; save(); renderPanel(); } }, "‹ overview")),
-    h("h3", {}, `#${t.id} ${t.title}`),
-    h("div", { class: "chips" },
-      e ? h("span", { class: "chip" }, h("i", { class: "dot", style: `background:${STATE_COLOR[e.state]}` }), STATE_WORD[e.state]) : null,
-      h("span", { class: "chip" }, t.kind),
-      e && e.monster ? h("span", { class: "chip", style: "border-color:rgba(255,107,89,.5)" }, "beacon: needs you") : null),
-    h("dl", { class: "kv" },
-      h("dt", {}, "status"), h("dd", {}, t.status),
-      t.claimed_by ? [h("dt", {}, "claimed by"), h("dd", {}, t.claimed_by)] : null,
-      t.blocked_by.length ? [h("dt", {}, "blocked by"), h("dd", {}, ...t.blocked_by.flatMap((n, i) => [i ? ", " : "", ticketLink(p, n), p.byId.get(n) ? ` (${p.byId.get(n).status})` : ""]))] : null,
-      h("dt", {}, "file"), h("dd", { class: "mono" }, path)),
-    ...t.sections.flatMap((s) => [h("h4", {}, s.heading), h("div", { class: "md", html: md(s.body, p) })]),
-    t.comments.length ? h("h4", {}, `Comments · ${t.comments.length}`) : null,
-    ...t.comments.map((c) => h("div", { style: "margin:6px 0" }, h("div", { class: "muted small" }, `${c.author} · ${c.when}`), h("div", { class: "md", html: md(c.body, p) }))),
-    h("div", { class: "ask" }, input, h("button", { onClick: send }, "Send")),
-    h("div", { class: "muted small", style: "margin-top:4px" }, "Goes to pi as a message from you; the view itself never writes."),
-  ];
+  const P = (x, y) => [(x - wx0) * 16 + 8, (y - wy0) * 16 + 8]; // world tile → layer px (tile centre)
+  regions.forEach((r) => (r.P = (mx, my) => P(mx + r.off[0], my + r.off[1])));
+
+  const chunks = [];
+  for (let cy = 0; cy < H; cy += CHUNK) for (let cx = 0; cx < W; cx += CHUNK) {
+    const cw = Math.min(CHUNK, W - cx), ch = Math.min(CHUNK, H - cy);
+    const canvas = document.createElement("canvas");
+    canvas.width = cw * 16; canvas.height = ch * 16;
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = false;
+    chunks.push({ canvas, ctx, px: cx * 16, py: cy * 16, tx: cx, ty: cy, tw: cw, th: ch });
+  }
+  const paint = (box, fn) => {
+    for (const k of chunks) {
+      if (box[2] < k.px || box[0] > k.px + k.canvas.width || box[3] < k.py || box[1] > k.py + k.canvas.height) continue;
+      k.ctx.save(); k.ctx.translate(-k.px, -k.py); fn(k.ctx); k.ctx.restore();
+    }
+  };
+  const spr = (s, x, y, opt) => paint([x - 9, y - 9, x + 9, y + 9], (ctx) => drawSpr(ctx, s, x, y, opt));
+
+  // Ground: four 8 px quarters a tile, each following the neighbours that touch its corner, in the owner's biome.
+  const QD = [[-1, -1], [1, -1], [-1, 1], [1, 1]];
+  for (const k of chunks) {
+    const img = k.ctx.createImageData(k.canvas.width, k.canvas.height), rowBytes = k.canvas.width * 4;
+    for (let r = 0; r < k.th; r++) for (let c = 0; c < k.tw; c++) {
+      const x = wx0 + k.tx + c, y = wy0 + k.ty + r, o = own(x, y);
+      // Sea tiles take the biome of the nearest land, so its shores match.
+      const reg = regions[o >= 0 ? o : nearest[(y - wy0) * W + (x - wx0)]];
+      if (!reg) continue;
+      const g = at(x, y) || ".", hh = o >= 0 ? hash(x - reg.off[0], y - reg.off[1]) : hash(x, y), qs = quartersFor(reg.biome);
+      for (let q = 0; q < 4; q++) {
+        const [dx, dy] = QD[q];
+        const shape = (is) => qshape(is(at(x, y + dy)), is(at(x + dx, y)), is(at(x + dx, y + dy)));
+        let idx;
+        if (g === "~") { const s = shape((v) => v == null || v === "~"); idx = s === 4 && hh % 3n === 0n ? G.WATER2 + q : G.WATER + s * 4 + q; }
+        else if (g === "c") idx = G.CAMP + shape((v) => v === "c") * 4 + q;
+        else if (g === "r") idx = G.ROUGH + shape((v) => v === "r") * 4 + q;
+        else idx = G.GRASS + (hh % 4n === 0n ? 4 : 0) + q;
+        const quad = qs[idx], bx = c * 16 + (q % 2) * 8, by = r * 16 + (q >> 1) * 8;
+        for (let yy = 0; yy < 8; yy++) img.data.set(quad.subarray(yy * 32, yy * 32 + 32), (by + yy) * rowBytes + bx * 4);
+      }
+    }
+    k.ctx.putImageData(img, 0, 0);
+  }
+
+  // Roads: each tile's connections come from the paths' own steps; a straight crossing is a bridge.
+  const key = (x, y) => `${x},${y}`;
+  const covered = new Set();
+  const dirBit = (a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1]; return dx === 0 && dy === -1 ? 1 : dx === 1 && dy === 0 ? 2 : dx === 0 && dy === 1 ? 4 : dx === -1 && dy === 0 ? 8 : 0; };
+  for (const reg of regions) {
+    if (reg.kind !== "map") continue;
+    const cells = new Map(), [ox, oy] = reg.off;
+    const cell = (x, y) => { const k = key(x, y); let c = cells.get(k); if (!c) cells.set(k, (c = { x, y, mask: 0, travelled: false, straight: true, axes: 0 })); return c; };
+    for (const road of reg.model.roads) {
+      const n = road.path.length;
+      road.path.forEach(([x, y], k) => {
+        const c = cell(x, y);
+        c.travelled = c.travelled || road.travelled;
+        if (k === 0 || k === n - 1) { c.straight = false; return; }
+        const a = road.path[k - 1], b = road.path[k + 1];
+        if (a[0] === b[0]) c.axes |= 2; else if (a[1] === b[1]) c.axes |= 1; else c.straight = false;
+      });
+      for (let k = 1; k < n; k++) { const a = road.path[k - 1], b = road.path[k]; cell(a[0], a[1]).mask |= dirBit(a, b); cell(b[0], b[1]).mask |= dirBit(b, a); }
+    }
+    for (const c of cells.values()) {
+      const wx = c.x + ox, wy = c.y + oy, g = at(wx, wy), a = c.travelled ? 1 : 0.62, [px, py] = P(wx, wy);
+      covered.add(key(wx, wy));
+      const road = (i) => paint([px - 8, py - 8, px + 8, py + 8], (ctx) => { ctx.globalAlpha = a; ctx.drawImage(art.roads, i * 16, 0, 16, 16, px - 8, py - 8, 16, 16); ctx.globalAlpha = 1; });
+      if (g === "~") road(c.mask & 0b1010 ? R.BRIDGE_EW : R.BRIDGE_NS);
+      else if (c.straight && c.axes === 3) { road(R.DIRT + 0b1010); road(R.BRIDGE_NS); }
+      else road((g === "r" ? R.COBBLE : R.DIRT) + c.mask);
+    }
+  }
+
+  // Decorations, row by row, in the owner's biome; tall trees only where their canopy covers nothing that matters.
+  const block = (x, y, w, up) => { for (let dy = -up; dy <= 0; dy++) for (let dx = -w; dx <= w; dx++) covered.add(key(x + dx, y + dy)); };
+  for (const reg of regions) {
+    const [ox, oy] = reg.off;
+    if (reg.kind === "map") {
+      reg.model.encounters.forEach((e) => block(e.pos[0] + ox, e.pos[1] + oy, 1, 1));
+      block(reg.model.start.pos[0] + ox, reg.model.start.pos[1] + oy, 2, 2);
+      block(reg.model.destination.pos[0] + ox, reg.model.destination.pos[1] + oy, 2, 3);
+    } else block(reg.site[0] + ox, reg.site[1] + oy, 2, 2);
+  }
+  for (let ty = 0; ty < H; ty++) for (let tx = 0; tx < W; tx++) {
+    const x = tx + wx0, y = ty + wy0, g = at(x, y);
+    if (!g || !"To,:".includes(g) || covered.has(key(x, y)) || own(x, y) < 0) continue;
+    const reg = regions[own(x, y)], b = reg.biome, plants = BIOMES[b].plants;
+    const hh = hash((x - reg.off[0]) * 31, (y - reg.off[1]) * 17), pick = (n) => Number((hh >> 8n) % BigInt(n));
+    const [px, py] = P(x, y), opt = { biome: plants === "desert" ? null : b };
+    if (g === "T") {
+      const above = at(x, y - 1), open = !covered.has(key(x, y - 1)) && above != null && above !== "~", autumn = hh % 13n === 0n;
+      if (plants === "desert") {
+        if (open && pick(3) === 0) { spr(rogue(597), px, py, opt); spr(rogue(540), px, py - 15, opt); }
+        else spr(pick(5) === 0 ? rogue(654) : rogue(pick(2) ? 535 : 539), px, py, opt);
+      } else if (open) {
+        const [top, trunk] = plants === "pines" ? [TALL[2], TALL[3]][pick(2)] : autumn ? TALL_AUTUMN[pick(2)] : TALL[pick(TALL.length)];
+        spr(trunk, px, py, opt); spr(top, px, py - 15, opt);
+      } else spr(plants === "pines" ? [SMALL[2], SMALL[3]][pick(2)] : autumn ? SMALL_AUTUMN[pick(2)] : SMALL[pick(SMALL.length)], px, py, opt);
+    } else if (g === "o") spr(ROCKS[pick(ROCKS.length)], px, py, opt);
+    else if (g === "," && hh % 5n < 3n) {
+      if (plants === "desert") { if (pick(3) === 0) spr(rogue(pick(2) ? 592 : 649), px, py, opt); }
+      else if (plants === "pines") { if (pick(4) === 0) spr(WHITE_FLOWER, px, py, opt); }
+      else spr(FLOWERS[pick(FLOWERS.length)], px, py, opt);
+    } else if (g === ":" && hh % 7n === 0n) spr(WHITE_FLOWER, px, py, opt);
+  }
+
+  // Encounters, landmarks and buildings, back to front.
+  const things = [];
+  for (const reg of regions) {
+    const [ox, oy] = reg.off;
+    if (reg.kind === "map") {
+      for (const e of reg.model.encounters) things.push({ y: e.pos[1] + oy, draw: () => { const [x, y] = reg.P(...e.pos); paint([x - 48, y - 48, x + 48, y + 48], (ctx) => drawEncounterStatic(ctx, e, [x, y])); } });
+      things.push({ y: reg.model.start.pos[1] + oy, draw: () => { const [x, y] = reg.P(...reg.model.start.pos); SPR.cottage.forEach(([s, dx, dy]) => spr(s, x + dx * 16, y - dy * 16)); } });
+      things.push({ y: reg.model.destination.pos[1] + oy, draw: () => { const [x, y] = reg.P(...reg.model.destination.pos); SPR.hall.forEach(([s, dx, dy]) => spr(s, x + dx * 16, y - dy * 16)); } });
+    } else {
+      things.push({ y: reg.site[1] + oy, draw: () => { const [x, y] = reg.P(...reg.site); (SPR[BUILDING[reg.comb] || "cottage"]).forEach(([s, dx, dy]) => spr(s, x + dx * 16, y - dy * 16)); } });
+    }
+  }
+  things.sort((a, b) => a.y - b.y).forEach((t) => t.draw());
+
+  // Fog: a dimmed bank with soft edges, and a cloud per Not-yet-specified entry.
+  for (const reg of regions) {
+    if (reg.kind !== "map") continue;
+    const m = reg.model;
+    if (m.fog.bank) {
+      const [fx, fy, fw, fh] = m.fog.bank, [x0, y0] = reg.P(fx, fy);
+      paint([x0 - 30, y0 - 30, x0 + fw * 16 + 30, y0 + fh * 16 + 30], (ctx) => {
+        ctx.fillStyle = "rgba(41,46,71,0.6)";
+        ctx.fillRect(x0 - 8, y0 - 8, fw * 16, fh * 16);
+        for (let row = fy; row < fy + fh; row++) for (const [col, dx] of [[fx, -0.4], [fx + fw - 1, 0.4]]) { const [bx, by] = reg.P(col, row); blob(ctx, bx + dx * 16, by, 18, "41,46,71", 0.55); }
+      });
+    }
+    m.fog.patches.forEach((f) => {
+      const [x, y] = reg.P(...f.pos);
+      paint([x - 30, y - 30, x + 30, y + 30], (ctx) => { for (const [dx, dy, r] of [[0, 0, 19], [-11, 3, 14], [11, 4, 15], [2, -6, 13]]) blob(ctx, x + dx, y + dy, r, "219,224,240", 0.55); });
+    });
+  }
+  L = { chunks, P, W, H, wx0, wy0, own, width: W * 16, height: H * 16 };
+  console.log(`wayquest: ${regions.length} regions, ${W}×${H} tiles, ${chunks.length} chunks, ${Math.round(performance.now() - t0)} ms`);
 }
 
-function fogPanel(p, i) {
-  const f = p.model.fog.patches[i];
-  if (!f) return overviewPanel(p);
-  return [
-    h("div", { class: "small" }, h("span", { class: "link", onClick: () => { S.ticket = null; save(); renderPanel(); } }, "‹ overview")),
-    h("h3", {}, `☁ ${f.name || "Fog"}`),
-    h("div", { class: "muted small" }, "Not yet specified: in the map's fog, not sharp enough to be a ticket."),
-    h("div", { class: "md", style: "margin-top:8px", html: md(f.text, p) }),
-  ];
-}
-function destinationPanel(p) {
-  return [
-    h("div", { class: "small" }, h("span", { class: "link", onClick: () => { S.ticket = null; save(); renderPanel(); } }, "‹ overview")),
-    h("h3", {}, "Destination"),
-    h("div", { class: "md", html: md(p.tracker.destination, p) }),
-  ];
+const STRUCT_TINT = { cleared: "rgb(148,148,158)", blocked: "rgb(23,23,36)" };
+function drawEncounterStatic(ctx, e, [x, y]) {
+  if (e.state === "claimed") blob(ctx, x, y - 3, 42, "255,199,77", 0.5);
+  if (e.state === "held") blob(ctx, x, y - 3, 42, "255,97,77", 0.5);
+  const rc = { claimed: ["255,204,77", 0.95], held: ["255,107,89", 0.95], frontier: ["166,255,140", 0.45] }[e.state];
+  if (rc) ring(ctx, x, y + 4, 27, 13.5, rc[0], rc[1]);
+  const tint = STRUCT_TINT[e.state];
+  (SPR[e.kind] || SPR.unknown).forEach(([s, dx, dy]) => drawSpr(ctx, s, x + dx * 16, y - dy * 16, { tint, alpha: e.state === "cleared" ? 0.9 : e.state === "blocked" ? 0.95 : 1 }));
+  if (e.state === "blocked") blob(ctx, x, y - 7, 21, "13,15,26", 0.8);
 }
 
-function select(id) {
-  S.ticket = id;
-  S.sheet = true;
-  save();
-  if (panelEl) panelEl.classList.remove("collapsed");
-  renderPanel();
-  if (typeof id === "number") focusOn(id);
+// ---------- drawing: the layer, plus what moves, plus labels ----------
+function drawWorld(ctx, cam, t, wpx, hpx, dpr, opt) {
+  const o = opt || {};
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = "#2c6f8c";
+  ctx.fillRect(0, 0, wpx, hpx);
+  ctx.setTransform(dpr * cam.s, 0, 0, dpr * cam.s, dpr * cam.x, dpr * cam.y);
+  ctx.imageSmoothingEnabled = cam.s * dpr < 1;
+  const vx0 = -cam.x / cam.s, vy0 = -cam.y / cam.s, vx1 = vx0 + wpx / cam.s, vy1 = vy0 + hpx / cam.s;
+  const vis = (x, y, m) => x > vx0 - m && x < vx1 + m && y > vy0 - m && y < vy1 + m;
+  for (const k of L.chunks) {
+    if (k.px > vx1 || k.py > vy1 || k.px + k.canvas.width < vx0 || k.py + k.canvas.height < vy0) continue;
+    ctx.drawImage(k.canvas, k.px, k.py);
+  }
+  ctx.imageSmoothingEnabled = false;
+  const selected = o.sel && o.sel.ticket != null && typeof o.sel.ticket === "number" ? o.sel : null;
+  for (const reg of regions) {
+    if (reg.kind !== "map") continue;
+    for (const e of reg.model.encounters) {
+      const [x, y] = reg.P(...e.pos);
+      if (!vis(x, y, 40)) continue;
+      if (selected && selected.region === reg.key && selected.ticket === e.id) blob(ctx, x, y - 4, 30, "255,224,115", 0.55 + 0.15 * Math.sin(t * 4));
+      if (e.kind === "grilling" && e.state !== "blocked") drawSpr(ctx, FIRE[Math.floor(t / 0.16) % 2], x, y, { tint: STRUCT_TINT[e.state] });
+      if (e.state === "claimed") {
+        const ex = EXPLORERS[Number(nameHash(e.claimed_by || "someone") % BigInt(EXPLORERS.length))];
+        drawSpr(ctx, ex, x - 13, y + 1 - Math.abs(Math.sin(t * 9 + e.id)) * 1.5);
+        drawSpr(ctx, TOOL, x - 7, y - 3, { scale: 0.7, rot: Math.sin(t * 9 + e.id) * 0.7 });
+      }
+      if (e.monster) drawSpr(ctx, MONSTERS[(e.id * 7 + 3) % MONSTERS.length], x + 8, y - 11 - Math.abs(Math.sin(t * 3.2 + e.id * 1.7)) * 2);
+    }
+  }
+  // Labels in screen space, most important first; one that would overlap a label already drawn is skipped.
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  const S2 = (lx, ly) => [lx * cam.s + cam.x, ly * cam.s + cam.y];
+  const placed = [];
+  const plate = (text, sx, sy, size, bg, fg, always, weight, clamp) => {
+    if (sx < -200 || sy < -40 || sx > wpx + 200 || sy > hpx + 40) return;
+    ctx.font = `${weight || 600} ${size}px system-ui, -apple-system, sans-serif`;
+    const w = ctx.measureText(text).width + 10, hh = size + 6;
+    if (clamp) sx = Math.min(Math.max(sx, w / 2 + 6), wpx - w / 2 - 6);
+    const box = [sx - w / 2, sy - hh / 2, sx + w / 2, sy + hh / 2];
+    if (!always && placed.some((b) => box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1])) return;
+    placed.push(box);
+    ctx.fillStyle = bg; ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(box[0], box[1], w, hh, 4); else ctx.rect(box[0], box[1], w, hh);
+    ctx.fill(); ctx.fillStyle = fg; ctx.fillText(text, sx, sy + 0.5);
+  };
+  const near = cam.s >= 1.1, far = cam.s < 0.45;
+  if (selected) {
+    const reg = byKey.get(selected.region), e = reg && reg.model.encounters.find((x) => x.id === selected.ticket);
+    if (e) { const [x, y] = reg.P(...e.pos), [sx, sy] = S2(x, y - 27); plate(trim(`#${e.id} ${e.title}`, 56), sx, sy - 4 - (e.state === "claimed" || e.state === "held" ? 20 : 0), 12, "rgba(18,20,31,.88)", "#fff7e6", true); }
+  }
+  // Region names: the comb, and the map's title.
+  for (const reg of regions) {
+    const [a, b, c] = reg.core, [x0, y0] = reg.P(a, b), [x1] = reg.P(c, b), [sx, sy] = S2((x0 + x1) / 2, y0 - 6);
+    const name = reg.kind === "map" ? `${reg.comb} · ${trim(reg.title, 40)}` : reg.title;
+    if (sx < -40 || sx > wpx + 40) continue;
+    plate(name, sx, Math.max(14, sy), far ? 12 : 13, "rgba(15,18,22,.82)", BIOMES[reg.biome].swatch, false, 700, true);
+  }
+  if (!far) for (const reg of regions) {
+    if (reg.kind !== "map") continue;
+    for (const e of reg.model.encounters) {
+      if (e.state !== "claimed" && e.state !== "held") continue;
+      const [x, y] = reg.P(...e.pos), [sx, sy] = S2(x, y - 27);
+      plate(e.state === "held" ? "your move" : `${e.claimed_by || "someone"} at work`, sx, sy - 4, 11, e.state === "held" ? "rgba(153,38,31,.92)" : "rgba(128,82,15,.92)", "#fff5db");
+    }
+  }
+  for (const reg of regions) {
+    if (reg.kind !== "map" || far) continue;
+    const m = reg.model;
+    { const [sx, sy] = S2(...reg.P(...m.destination.pos)); plate(trim(m.destination.title, 48), sx, sy + 15 * cam.s + 8, 11, "rgba(18,20,31,.7)", "#ffe6a8"); }
+    if (near) for (const e of m.encounters) { const [x, y] = reg.P(...e.pos), [sx, sy] = S2(x, y + 12); plate(`#${e.id}`, sx, sy + 4, 10, e.state === "cleared" ? "rgba(18,20,31,.35)" : "rgba(18,20,31,.62)", e.state === "cleared" ? "rgba(255,247,230,.55)" : "#fff7e6"); }
+    if (cam.s >= 0.7) m.fog.patches.forEach((f) => { const [x, y] = reg.P(...f.pos), [sx, sy] = S2(x, y + 15); plate(f.name || "?", sx, sy + 4, 10, "rgba(18,20,31,.55)", "#e9ecf5"); });
+  }
 }
-function focusOn(id) {
-  const e = cur && cur.model.encounters.find((x) => x.id === id);
+
+// ---------- camera ----------
+const canvas = h("canvas", {});
+function regionBox(reg) { const [a, b, c, d] = reg.core, [x0, y0] = reg.P(a, b), [x1, y1] = reg.P(c, d); return [x0 - 8, y0 - 24, x1 + 8, y1 + 8]; }
+function fitBox(box, w, hpx, whole) {
+  const [x0, y0, x1, y1] = box, sw = w / (x1 - x0), sh = hpx / (y1 - y0);
+  // The whole box when it fits well; on a tall, narrow screen, fill the height and pan instead.
+  const s = Math.min(6, whole ? Math.min(sw, sh) : Math.min(Math.max(sw, sh), 1.8 * Math.min(sw, sh)));
+  return { s, x: w / 2 - ((x0 + x1) / 2) * s, y: hpx / 2 - ((y0 + y1) / 2) * s };
+}
+function fitWorld() { return fitBox([0, 0, L.width, L.height], canvas.clientWidth, canvas.clientHeight, true); }
+let cam = S.cam;
+function setCam(c, animate) {
+  if (!animate || !cam) { cam = c; S.cam = cam; save(); return; }
+  const from = { ...cam }, t0 = performance.now(), dur = 380;
+  const step = (now) => {
+    const k = Math.min(1, (now - t0) / dur), e = 1 - Math.pow(1 - k, 3);
+    const s = Math.exp(Math.log(from.s) + (Math.log(c.s) - Math.log(from.s)) * e);
+    // Interpolate the world point at the screen centre, so the move reads as a pan and a zoom.
+    const w = canvas.clientWidth / 2, hh = canvas.clientHeight / 2;
+    const fx = (w - from.x) / from.s, fy = (hh - from.y) / from.s, tx = (w - c.x) / c.s, ty = (hh - c.y) / c.s;
+    const px = fx + (tx - fx) * e, py = fy + (ty - fy) * e;
+    cam = { s, x: w - px * s, y: hh - py * s };
+    if (k < 1) requestAnimationFrame(step); else { cam = c; S.cam = cam; save(); }
+  };
+  requestAnimationFrame(step);
+}
+function focusRegion(reg, animate) {
+  const c = fitBox(regionBox(reg), canvas.clientWidth, canvas.clientHeight, false), box = regionBox(reg), s = Math.min(c.s, 2.2);
+  setCam({ s, x: canvas.clientWidth / 2 - ((box[0] + box[2]) / 2) * s, y: canvas.clientHeight / 2 - ((box[1] + box[3]) / 2) * s }, animate);
+}
+function focusTicket(reg, id, animate) {
+  const e = reg.model.encounters.find((x) => x.id === id);
   if (!e) return;
-  requestAnimationFrame(() => {
-    resize();
-    const [x, y] = cur.layer.P(...e.pos);
-    const w = canvas.clientWidth, hpx = canvas.clientHeight;
-    const s = Math.max(cam.s, 1.6);
-    cam = { s, x: w / 2 - x * s, y: hpx / 2 - y * s };
-    saveCam();
-  });
+  const [x, y] = reg.P(...e.pos), s = Math.max(cam ? cam.s : 1, 1.6);
+  setCam({ s, x: canvas.clientWidth / 2 - x * s, y: canvas.clientHeight / 2 - y * s }, animate);
 }
-
-// camera, input, animation
+function zoomAt(f, sx, sy) {
+  const s = Math.min(6, Math.max(0.05, cam.s * f)), k = s / cam.s;
+  cam = { s, x: sx - (sx - cam.x) * k, y: sy - (sy - cam.y) * k };
+  S.cam = cam; save();
+}
 function resize() {
-  if (screen !== "world" || !cur) return;
-  const dpr = Math.min(2.5, window.devicePixelRatio || 1);
-  const w = canvas.clientWidth, hpx = canvas.clientHeight;
+  const dpr = Math.min(2.5, window.devicePixelRatio || 1), w = canvas.clientWidth, hpx = canvas.clientHeight;
   if (!w || !hpx) return;
   canvas.width = Math.round(w * dpr); canvas.height = Math.round(hpx * dpr);
-  if (!cam) cam = fitCam(cur, w, hpx);
+  if (!cam) cam = fitWorld();
 }
-function saveCam() { if (cur) { S.cams[cur.key] = cam; save(); } }
-function zoomAt(f, sx, sy) {
-  const s = Math.min(6, Math.max(0.12, cam.s * f));
-  const k = s / cam.s;
-  cam = { s, x: sx - (sx - cam.x) * k, y: sy - (sy - cam.y) * k };
-  saveCam();
-}
-function zoomBy(f) { zoomAt(f, canvas.clientWidth / 2, canvas.clientHeight / 2); }
+
+// ---------- input ----------
 const pointers = new Map();
 let gesture = null;
 canvas.addEventListener("pointerdown", (ev) => {
@@ -1026,7 +915,7 @@ canvas.addEventListener("pointermove", (ev) => {
   } else if (pts.length >= 2 && was.length >= 2) {
     const d0 = Math.hypot(was[0][0] - was[1][0], was[0][1] - was[1][1]) || 1, d1 = Math.hypot(pts[0][0] - pts[1][0], pts[0][1] - pts[1][1]);
     const m0 = [(was[0][0] + was[1][0]) / 2, (was[0][1] + was[1][1]) / 2], m1 = [(pts[0][0] + pts[1][0]) / 2, (pts[0][1] + pts[1][1]) / 2];
-    const s = Math.min(6, Math.max(0.12, gesture.cam.s * (d1 / d0))), k = s / gesture.cam.s;
+    const s = Math.min(6, Math.max(0.05, gesture.cam.s * (d1 / d0))), k = s / gesture.cam.s;
     cam = { s, x: m1[0] - (m0[0] - gesture.cam.x) * k, y: m1[1] - (m0[1] - gesture.cam.y) * k };
     gesture.moved = 99;
   }
@@ -1037,7 +926,7 @@ const endPointer = (ev) => {
   if (gesture && pointers.size === 0) {
     if (gesture.moved < 6 && performance.now() - gesture.t < 500) tap(gesture.start[0], gesture.start[1]);
     gesture = null;
-    saveCam();
+    S.cam = cam; save();
     canvas.classList.remove("drag");
   } else if (gesture) gesture = { ...gesture, cam: { ...cam }, pts: new Map(pointers) };
 };
@@ -1047,46 +936,349 @@ canvas.addEventListener("wheel", (ev) => { ev.preventDefault(); zoomAt(Math.exp(
 window.addEventListener("resize", () => requestAnimationFrame(resize));
 
 function tap(sx, sy) {
-  const p = cur, L = p.layer, m = p.model;
   const lx = (sx - cam.x) / cam.s, ly = (sy - cam.y) / cam.s, pad = 10 / cam.s;
   let best = null, bd = Infinity;
-  for (const e of m.encounters) {
-    const [x, y] = L.P(...e.pos), cx = x, cy = y - 6;
-    if (Math.abs(lx - cx) <= 15 + pad && Math.abs(ly - cy) <= 17 + pad) { const d = Math.hypot(lx - cx, ly - cy); if (d < bd) { bd = d; best = e.id; } }
+  for (const reg of regions) {
+    if (reg.kind !== "map") continue;
+    for (const e of reg.model.encounters) {
+      const [x, y] = reg.P(...e.pos), cy = y - 6;
+      if (Math.abs(lx - x) <= 15 + pad && Math.abs(ly - cy) <= 17 + pad) { const d = Math.hypot(lx - x, ly - cy); if (d < bd) { bd = d; best = [reg, e.id]; } }
+    }
   }
-  if (best != null) return select(best);
-  const fi = m.fog.patches.findIndex((f) => { const [x, y] = L.P(...f.pos); return Math.hypot(lx - x, ly - y) <= 20 + pad; });
-  if (fi >= 0) { S.ticket = `fog:${fi}`; save(); return renderPanel(); }
-  const [dx, dy] = L.P(...m.destination.pos);
-  if (Math.abs(lx - dx) <= 26 + pad && ly >= dy - 42 - pad && ly <= dy + 10 + pad) { S.ticket = "destination"; save(); return renderPanel(); }
-  if (S.ticket != null) { S.ticket = null; save(); renderPanel(); }
+  if (best && cam.s >= 0.45) return select({ region: best[0].key, ticket: best[1] }, true);
+  const tx = Math.floor(lx / 16) + L.wx0, ty = Math.floor(ly / 16) + L.wy0, o = L.own(tx, ty);
+  if (o < 0) return select(null);
+  const reg = regions[o];
+  if (cam.s < 0.45) { select({ region: reg.key }); return focusRegion(reg, true); }
+  if (reg.kind === "map") {
+    const fi = reg.model.fog.patches.findIndex((f) => { const [x, y] = reg.P(...f.pos); return Math.hypot(lx - x, ly - y) <= 20 + pad; });
+    if (fi >= 0) return select({ region: reg.key, ticket: `fog:${fi}` });
+    const [dx, dy] = reg.P(...reg.model.destination.pos);
+    if (Math.abs(lx - dx) <= 26 + pad && ly >= dy - 42 - pad && ly <= dy + 10 + pad) return select({ region: reg.key, ticket: "destination" });
+  }
+  select({ region: reg.key });
 }
 
+// ---------- history → what changed, and who ----------
+function filesOf(id, m) {
+  const map = m.get("map.md");
+  if (map == null) return null;
+  return { id, map, tickets: [...m].filter(([k]) => /^issues\/\d[^/]*\.md$/.test(k)).map(([k, v]) => [k.slice(7), v]).sort() };
+}
+function diffStates(r, prev, next, entry) {
+  const a = filesOf(r.effort, prev), b = filesOf(r.effort, next);
+  if (!b) return [{ what: "map_removed", text: "map removed", parts: [{ text: "map removed" }] }];
+  if (!a) return [{ what: "charted", text: `charted: ${b.tickets.length} tickets`, parts: [{ text: `charted: ${b.tickets.length} tickets` }] }];
+  const out = JSON.parse(world.changes(JSON.stringify({ prev: a, next: b, player: S.player })));
+  if (out.length) return out;
+  // Nothing on the overworld changed: say which texts were edited.
+  const pre = `.scratch/${r.effort}/`;
+  const touched = [...entry.summary.added, ...entry.summary.modified, ...entry.summary.removed].filter((x) => x.startsWith(pre)).map((x) => x.slice(pre.length));
+  const ids = [...new Set(touched.map((x) => /^issues\/(\d+)/.exec(x)).filter(Boolean).map((m) => parseInt(m[1], 10)))];
+  const parts = [];
+  if (touched.includes("map.md")) parts.push({ text: "map notes edited" });
+  ids.forEach((id, i) => { if (parts.length) parts.push({ text: i ? ", " : "; " }); parts.push({ ticket: id }); parts.push({ text: " edited" }); });
+  return [{ what: "edited", text: "", parts: parts.length ? parts : [{ text: "edited" }] }];
+}
+async function activityOf(r, limit) {
+  if (r.activity && (r.activity.length >= limit || r.activityDone)) return r.activity;
+  const log = await ue.log(r.comb);
+  const pre = `.scratch/${r.effort}/`;
+  const touches = (e) => e.summary && [...e.summary.added, ...e.summary.modified, ...e.summary.removed].some((x) => x.startsWith(pre));
+  let state = new Map([["map.md", r.files.map], ...r.files.tickets.map(([n, t]) => [`issues/${n}`, t])]);
+  const out = [];
+  let done = true;
+  for (const e of log) {
+    if (!touches(e)) continue;
+    if (out.length >= limit) { done = false; break; }
+    const prev = new Map(state), rel = (x) => x.slice(pre.length);
+    for (const x of e.summary.added) if (x.startsWith(pre)) prev.delete(rel(x));
+    for (const x of [...e.summary.modified, ...e.summary.removed]) if (x.startsWith(pre)) {
+      if (!e.parent) { prev.delete(rel(x)); continue; }
+      try { prev.set(rel(x), await ue.read(`/datacombs/${r.comb}@${e.parent}/${x}`)); } catch { prev.delete(rel(x)); }
+    }
+    out.push({ entry: e, changes: diffStates(r, prev, state, e) });
+    state = prev;
+  }
+  r.activity = out;
+  r.activityDone = done;
+  return out;
+}
+/** Who made a history entry, in a few words. */
+function who(e) {
+  const a = e.author || {};
+  const model = a.model ? ` (${a.model})` : "";
+  switch (e.kind) {
+    case "tool_call": return `${a.harness || "session"}${model} · ${e.tool_name || "tool"}`;
+    case "turn": return `${a.harness || "session"}${model} · turn`;
+    case "external": return a.harness === "system" ? "the node" : "you, outside a tool call";
+    case "pull": return a.harness && a.harness !== "git" ? `${a.harness}${model} · via git` : a.principal && a.principal !== "user" ? `${a.principal} · via git` : "pulled from git";
+    case "rollback": return "rollback";
+    case "switch": return "system switch";
+    case "genesis": return "created";
+    default: return e.kind;
+  }
+}
+async function buildFeed() {
+  const rows = [];
+  for (const r of regions) {
+    if (r.kind !== "map") continue;
+    for (const a of await activityOf(r, 8)) for (const c of a.changes) rows.push({ r, entry: a.entry, change: c });
+  }
+  rows.sort((a, b) => b.entry.time - a.entry.time);
+  feed = rows.slice(0, 24);
+}
+function partsNode(r, parts, ticket) {
+  const out = [];
+  if (ticket != null) out.push(ticketLink(r, ticket), " ");
+  for (const part of parts) out.push(part.ticket != null ? ticketLink(r, part.ticket) : part.text);
+  return out;
+}
+function ticketLink(r, id) {
+  const t = r.byId.get(id);
+  return h("span", { class: "link", title: t ? t.title : `#${id}`, onClick: (ev) => { ev.stopPropagation(); select({ region: r.key, ticket: id }, true); } }, `#${id}`);
+}
+
+// ---------- the screen: the world, and a panel beside it ----------
+let panelEl = null;
+const stage = h("div", { class: "stage" }, canvas,
+  h("div", { class: "title-plate" }, h("div", { class: "brand" }, "Way", h("span", {}, "Quest")), h("div", { class: "small muted", id: "subtitle" }, "")),
+  h("div", { class: "legend" },
+    h("span", {}, h("i", { class: "dot", style: "background:var(--frontier)" }), "frontier"),
+    h("span", {}, h("i", { class: "dot", style: "background:var(--claimed)" }), "under way"),
+    h("span", {}, h("i", { class: "dot", style: "background:var(--held)" }), "needs you"),
+    h("span", {}, h("i", { class: "dot", style: "background:var(--cleared)" }), "cleared"),
+    h("span", {}, h("i", { class: "dot", style: "background:var(--blocked)" }), "blocked")),
+  h("div", { class: "hud" },
+    h("button", { title: "zoom in", onClick: () => zoomAt(1.4, canvas.clientWidth / 2, canvas.clientHeight / 2) }, "+"),
+    h("button", { title: "zoom out", onClick: () => zoomAt(1 / 1.4, canvas.clientWidth / 2, canvas.clientHeight / 2) }, "−"),
+    h("button", { title: "the whole world", onClick: () => setCam(fitWorld(), true) }, "⤢")));
+
+function mount() {
+  panelEl = h("aside", { class: `panel${S.sheet ? "" : " collapsed"}` });
+  app.replaceChildren(h("div", { class: "world" }, stage, panelEl));
+  renderPanel();
+  requestAnimationFrame(resize);
+  startLoop();
+}
+
+/** Select something (null: the world). The panel follows; with focus, the camera too. */
+function select(sel, focus) {
+  if (sel && !byKey.has(sel.region)) sel = null;
+  S.sel = sel;
+  if (sel) S.sheet = true;
+  save();
+  if (panelEl) panelEl.classList.toggle("collapsed", !S.sheet);
+  renderPanel();
+  if (focus && sel) {
+    const reg = byKey.get(sel.region);
+    if (typeof sel.ticket === "number") focusTicket(reg, sel.ticket, true);
+    else focusRegion(reg, true);
+  }
+}
+
+function renderPanel() {
+  if (!panelEl) return;
+  const sel = S.sel, reg = sel && byKey.get(sel.region);
+  const sub = document.getElementById("subtitle");
+  if (sub) sub.textContent = `${plural((ue.combs || []).length, "comb")} · ${plural(regions.filter((r) => r.kind === "map").length, "map")}`;
+  let body, label;
+  if (!reg) { body = worldPanel(); label = worldLine(); }
+  else if (reg.kind === "comb") { body = combPanel(reg); label = reg.title; }
+  else if (sel.ticket === "destination") { body = destinationPanel(reg); label = `${reg.comb} · destination`; }
+  else if (typeof sel.ticket === "string" && sel.ticket.startsWith("fog:")) { body = fogPanel(reg, parseInt(sel.ticket.slice(4), 10)); label = `${reg.comb} · fog`; }
+  else if (typeof sel.ticket === "number" && reg.byId.get(sel.ticket)) { const t = reg.byId.get(sel.ticket); body = ticketPanel(reg, t); label = `${reg.comb} · #${t.id} ${t.title}`; }
+  else { body = mapPanel(reg); label = `${reg.comb} · ${reg.title}`; }
+  const head = h("button", { class: "sheet-toggle", onClick: () => { S.sheet = !S.sheet; save(); panelEl.classList.toggle("collapsed", !S.sheet); requestAnimationFrame(resize); } },
+    h("span", {}, label), h("span", {}, S.sheet ? "▾" : "▴"));
+  panelEl.replaceChildren(head, h("div", { class: "content" }, body));
+}
+function crumbs(...parts) {
+  return h("div", { class: "crumbs" }, parts.flatMap((p, i) => [i ? " › " : "", p.onClick ? h("span", { class: "link", onClick: p.onClick }, p.text) : p.text]));
+}
+const toWorld = { text: "World", onClick: () => select(null) };
+const toRegion = (reg) => ({ text: reg.kind === "map" ? reg.comb : reg.title, onClick: () => select({ region: reg.key }, true) });
+const maps = () => regions.filter((r) => r.kind === "map");
+
+function worldLine() {
+  const ms = maps(), n = (k) => ms.reduce((a, r) => a + r.sum[k], 0);
+  return `${n("beacons")} need you · ${n("underway")} under way · ${n("frontier")} frontier`;
+}
+function encRow(reg, e, withComb) {
+  return h("div", { class: "row click", onClick: () => select({ region: reg.key, ticket: e.id }, true) },
+    h("i", { class: "dot", style: `background:${e.monster ? "var(--held)" : STATE_COLOR[e.state]}` }),
+    h("span", { class: "t" }, `#${e.id} ${e.title}`),
+    h("span", { class: "pill" }, e.state === "claimed" ? (e.claimed_by || "someone") : e.state === "held" ? "your move" : e.kind),
+    withComb ? h("span", { class: "proj" }, reg.comb) : null);
+}
+function sumBar(s) {
+  const seg = (n, color) => (n ? h("i", { style: `width:${(100 * n) / Math.max(1, s.total)}%;background:${color}` }) : null);
+  return h("div", { class: "bar", title: `${s.cleared} cleared · ${s.underway} under way · ${s.frontier} frontier · ${s.blocked} blocked` },
+    seg(s.cleared, "var(--cleared)"), seg(s.underway, "var(--claimed)"), seg(s.frontier, "var(--frontier)"), seg(s.blocked, "var(--blocked)"));
+}
+
+function worldPanel() {
+  const ms = maps(), n = (k) => ms.reduce((a, r) => a + r.sum[k], 0);
+  const beacons = ms.flatMap((r) => r.model.encounters.filter((e) => e.monster).map((e) => [r, e]));
+  const feedNode = h("div", { class: "feed" }, feed == null ? h("div", { class: "muted small" }, "reading history…") : feed.length === 0 ? h("div", { class: "muted small" }, "No changes yet.") :
+    feed.map(({ r, entry, change }) => h("div", { class: "row" },
+      h("span", { class: "when", title: new Date(entry.time).toLocaleString() }, ago(entry.time)),
+      h("div", { class: "what" }, h("span", { class: "mono muted" }, `${r.comb} `), ...partsNode(r, change.parts, change.ticket),
+        h("div", { class: "who" }, `${who(entry)} · ${entry.message.split("\n")[0]}`)))));
+  return [
+    h("h3", {}, "Datacombs"),
+    ue.view && ue.view.note ? h("div", { class: "note" }, ue.view.note) : null,
+    h("div", { class: "totals" }, [["need you", n("beacons")], ["under way", n("underway")], ["frontier", n("frontier")], ["cleared", `${n("cleared")}/${n("total")}`]].map(([l, v]) => h("div", { class: "total" }, h("div", { class: "v" }, String(v)), h("div", { class: "l" }, l)))),
+    h("h4", {}, `Needs you · ${beacons.length}`),
+    beacons.length ? h("div", { class: "needs" }, beacons.map(([r, e]) => encRow(r, e, true))) : h("div", { class: "muted small" }, "Nothing is waiting on you."),
+    h("h4", {}, `Combs · ${(ue.combs || []).length}`),
+    regions.map((r) => h("div", { class: "proj-row", onClick: () => select({ region: r.key }, true) },
+      h("div", { class: "top" }, h("i", { class: "swatch", style: `background:${BIOMES[r.biome].swatch}`, title: BIOMES[r.biome].label }),
+        h("span", { class: "name" }, r.title),
+        h("span", { class: "proj" }, r.kind === "map" ? r.comb : "no map"),
+        r.combInfo.remote ? h("span", { class: "pill git" }, `git · ${r.combInfo.remote.state}`) : null),
+      r.kind === "map" ? [sumBar(r.sum), h("div", { class: "chips" },
+        h("span", { class: "chip" }, `${r.sum.cleared}/${r.sum.total} cleared`),
+        r.sum.beacons ? h("span", { class: "chip", style: "border-color:rgba(255,107,89,.5)" }, `${r.sum.beacons} need you`) : null,
+        r.sum.underway ? h("span", { class: "chip" }, `${r.sum.underway} under way`) : null,
+        r.sum.fog ? h("span", { class: "chip" }, `☁ ${r.sum.fog}`) : null)] : null,
+      r.combInfo.last ? h("div", { class: "small muted", style: "overflow:hidden;text-overflow:ellipsis;white-space:nowrap" }, `${ago(r.combInfo.last.time)} · ${who(r.combInfo.last)} · ${r.combInfo.last.message}`) : null)),
+    h("h4", {}, "Recent changes"),
+    feedNode,
+    h("div", { class: "settings" },
+      h("label", {}, "You are ", h("input", { value: S.player, title: "the designated human account: their claims are 'your move', and beacons are for them", onChange: (ev) => setPlayer(ev.target.value) })),
+      h("span", {}, "· overworlds by WayQuest's world crate · sprites by Kenney (CC0)")),
+  ];
+}
+
+function mapPanel(reg) {
+  const enc = reg.model.encounters;
+  const groups = [
+    ["Needs you", enc.filter((e) => e.monster), "Nothing is waiting on you here."],
+    ["Under way", enc.filter((e) => (e.state === "claimed" || e.state === "held") && !e.monster), null],
+    ["Frontier", enc.filter((e) => e.state === "frontier" && !e.monster), null],
+  ];
+  const act = h("div", {}, h("div", { class: "muted small" }, "reading history…"));
+  activityOf(reg, 12).then((list) => {
+    act.replaceChildren(...(list.length ? list.map(({ entry, changes }) => h("div", { class: "row", style: "flex-direction:column;gap:2px;align-items:stretch" },
+      changes.map((c) => h("div", {}, ...partsNode(reg, c.parts, c.ticket))),
+      h("div", { class: "muted small" }, `${ago(entry.time)} · ${who(entry)} · `, h("span", { class: "mono" }, `@${short(entry.id)}`)))) : [h("div", { class: "muted small" }, "No history entries touch this map.")]));
+  }).catch((e) => act.replaceChildren(h("div", { class: "err" }, String(e.message || e))));
+  return [
+    crumbs(toWorld, { text: reg.comb }),
+    h("h3", {}, reg.title),
+    h("div", { class: "small muted mono" }, `${combPath(reg.comb)}/.scratch/${reg.effort} · @${short(reg.combInfo.head)} · ${BIOMES[reg.biome].label}`),
+    h("div", { class: "md", html: md(reg.tracker.destination, reg) }),
+    sumBar(reg.sum),
+    h("div", { class: "chips", style: "margin:8px 0" },
+      h("span", { class: "chip" }, `${reg.sum.cleared}/${reg.sum.total} cleared`), h("span", { class: "chip" }, `${reg.sum.blocked} blocked`), h("span", { class: "chip" }, `☁ ${reg.sum.fog} fog`)),
+    groups.flatMap(([title, list, none]) => (list.length || none ? [h("h4", {}, `${title} · ${list.length}`), list.length ? list.map((e) => encRow(reg, e)) : h("div", { class: "muted small" }, none)] : [])),
+    h("h4", {}, "Recent changes"), act,
+    reg.model.fog.patches.length ? h("h4", {}, `Fog · not yet specified · ${reg.model.fog.patches.length}`) : null,
+    reg.model.fog.patches.map((f, i) => h("div", { class: "row click", onClick: () => select({ region: reg.key, ticket: `fog:${i}` }) }, h("span", {}, "☁"), h("span", { class: "t" }, f.name || trim(f.text, 60)))),
+  ];
+}
+
+function combPanel(reg) {
+  const c = reg.combInfo;
+  const hist = h("div", {}, h("div", { class: "muted small" }, "reading history…"));
+  ue.log(c.name).then((log) => {
+    hist.replaceChildren(...log.slice(0, 12).map((e) => h("div", { class: "row", style: "flex-direction:column;gap:1px;align-items:stretch" },
+      h("div", {}, e.message.split("\n")[0]),
+      h("div", { class: "muted small" }, `${ago(e.time)} · ${who(e)} · `, h("span", { class: "mono" }, `@${short(e.id)}`)))),
+      log.length > 12 ? h("div", { class: "muted small" }, `and ${log.length - 12} older`) : "");
+  }).catch((e) => hist.replaceChildren(h("div", { class: "err" }, String(e.message || e))));
+  return [
+    crumbs(toWorld, { text: reg.title }),
+    h("h3", {}, reg.title),
+    COMB_ABOUT[c.name] ? h("div", { class: "md" }, COMB_ABOUT[c.name]) : null,
+    h("div", { class: "muted small", style: "margin-top:6px" }, `No wayfinder map: uncharted land, ${BIOMES[reg.biome].label}. A map is .scratch/<effort>/map.md with tickets in issues/NN-<slug>.md.`),
+    h("dl", { class: "kv" },
+      h("dt", {}, "head"), h("dd", { class: "mono" }, short(c.head)),
+      h("dt", {}, "history"), h("dd", {}, plural(c.entries, "entry", "entries")),
+      h("dt", {}, "files"), h("dd", {}, `${c.files}${c.bytes ? ` · ${(c.bytes / 1024).toFixed(0)} KB` : ""}`),
+      c.remote ? [h("dt", {}, "git"), h("dd", {}, `${c.remote.url} ${c.remote.branch} · ${c.remote.state}`)] : null),
+    h("h4", {}, "Recent entries"), hist,
+  ];
+}
+
+function ticketPanel(reg, t) {
+  const e = reg.model.encounters.find((x) => x.id === t.id);
+  const path = `${combPath(reg.comb)}/.scratch/${reg.effort}/issues/${reg.fileOf.get(t.id)}`;
+  const input = h("input", { placeholder: e && e.monster ? "Answer, or ask pi to pick this up…" : "Ask pi about this ticket…" });
+  const send = () => {
+    const text = input.value.trim();
+    if (!text) return;
+    ue.prompt(`About "${t.title}" (${path}): ${text}`);
+    input.value = "";
+    toast((ue.view && ue.view.promptAck) || "Sent to pi in the console.");
+  };
+  input.addEventListener("keydown", (ev) => { if (ev.key === "Enter") send(); });
+  return [
+    crumbs(toWorld, toRegion(reg), { text: `#${t.id}` }),
+    h("h3", {}, `#${t.id} ${t.title}`),
+    h("div", { class: "chips" },
+      e ? h("span", { class: "chip" }, h("i", { class: "dot", style: `background:${STATE_COLOR[e.state]}` }), STATE_WORD[e.state]) : null,
+      h("span", { class: "chip" }, t.kind),
+      e && e.monster ? h("span", { class: "chip", style: "border-color:rgba(255,107,89,.5)" }, "beacon: needs you") : null),
+    h("dl", { class: "kv" },
+      h("dt", {}, "status"), h("dd", {}, t.status),
+      t.claimed_by ? [h("dt", {}, "claimed by"), h("dd", {}, t.claimed_by)] : null,
+      t.blocked_by.length ? [h("dt", {}, "blocked by"), h("dd", {}, t.blocked_by.flatMap((n, i) => [i ? ", " : "", ticketLink(reg, n), reg.byId.get(n) ? ` (${reg.byId.get(n).status})` : ""]))] : null,
+      h("dt", {}, "file"), h("dd", { class: "mono" }, path)),
+    t.sections.flatMap((s) => [h("h4", {}, s.heading), h("div", { class: "md", html: md(s.body, reg) })]),
+    t.comments.length ? h("h4", {}, `Comments · ${t.comments.length}`) : null,
+    t.comments.map((c) => h("div", { style: "margin:6px 0" }, h("div", { class: "muted small" }, `${c.author} · ${c.when}`), h("div", { class: "md", html: md(c.body, reg) }))),
+    h("div", { class: "ask" }, input, h("button", { onClick: send }, "Send")),
+    h("div", { class: "muted small", style: "margin-top:4px" }, "Goes to pi as a message from you; the view itself never writes."),
+  ];
+}
+function fogPanel(reg, i) {
+  const f = reg.model.fog.patches[i];
+  if (!f) return mapPanel(reg);
+  return [crumbs(toWorld, toRegion(reg), { text: "fog" }), h("h3", {}, `☁ ${f.name || "Fog"}`),
+    h("div", { class: "muted small" }, "Not yet specified: in the map's fog, not sharp enough to be a ticket."),
+    h("div", { class: "md", style: "margin-top:8px", html: md(f.text, reg) })];
+}
+function destinationPanel(reg) {
+  return [crumbs(toWorld, toRegion(reg), { text: "destination" }), h("h3", {}, "Destination"), h("div", { class: "md", html: md(reg.tracker.destination, reg) })];
+}
+
+async function setPlayer(v) {
+  S.player = String(v || "").trim() || "florek";
+  save();
+  combHeads.clear();
+  feed = null;
+  await scanAll();
+  renderPanel();
+  await buildFeed();
+  renderPanel();
+}
+
+let loop = 0;
 function frame(now) {
   loop = requestAnimationFrame(frame);
-  if (screen !== "world" || !cur || !cam || !canvas.width) return;
-  const dpr = canvas.width / canvas.clientWidth;
-  drawWorld(canvas.getContext("2d"), cur, cam, now / 1000, canvas.clientWidth, canvas.clientHeight, dpr, { selected: typeof S.ticket === "number" ? S.ticket : null });
+  if (!L || !cam || !canvas.width) return;
+  drawWorld(canvas.getContext("2d"), cam, now / 1000, canvas.clientWidth, canvas.clientHeight, canvas.width / canvas.clientWidth, { sel: S.sel });
 }
 function startLoop() { if (!loop) loop = requestAnimationFrame(frame); }
-function stopLoop() { if (loop) cancelAnimationFrame(loop); loop = 0; }
 
 // ---------- a little markdown, for ticket text ----------
-function inline(s, p) {
+function inline(s, r) {
   let out = esc(s);
   out = out.replace(/`([^`]+)`/g, "<code>$1</code>");
   out = out.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, text, url) => {
     const m = /(?:^|\/)(\d+)-[^/]*\.md$/.exec(url);
-    if (m && p && p.byId.has(parseInt(m[1], 10))) return `<span class="link" data-ticket="${parseInt(m[1], 10)}">${text}</span>`;
+    if (m && r && r.byId && r.byId.has(parseInt(m[1], 10))) return `<span class="link" data-region="${esc(r.key)}" data-ticket="${parseInt(m[1], 10)}">${text}</span>`;
     return `<span class="ext" title="${url}">${text}</span>`;
   });
   out = out.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/(^|[\s(])_([^_]+)_(?=[\s).,;:!?]|$)/g, "$1<i>$2</i>").replace(/(^|[\s(])\*([^*\s][^*]*)\*(?=[\s).,;:!?]|$)/g, "$1<i>$2</i>");
   return out;
 }
-function md(text, p) {
+function md(text, r) {
   const lines = String(text || "").split("\n");
   let html = "", list = null, para = [], code = null;
-  const flush = () => { if (para.length) { html += `<p>${inline(para.join(" "), p)}</p>`; para = []; } };
+  const flush = () => { if (para.length) { html += `<p>${inline(para.join(" "), r)}</p>`; para = []; } };
   const close = () => { if (list) { html += `</${list}>`; list = null; } };
   for (const raw of lines) {
     if (code != null) { if (/^```/.test(raw)) { html += `<pre><code>${esc(code)}</code></pre>`; code = null; } else code += (code ? "\n" : "") + raw; continue; }
@@ -1094,15 +1286,15 @@ function md(text, p) {
     const line = raw.trimEnd();
     let m;
     if (!line.trim()) { flush(); close(); continue; }
-    if ((m = /^(#{1,6})\s+(.*)$/.exec(line))) { flush(); close(); html += `<h4>${inline(m[2], p)}</h4>`; continue; }
+    if ((m = /^(#{1,6})\s+(.*)$/.exec(line))) { flush(); close(); html += `<h4>${inline(m[2], r)}</h4>`; continue; }
     if ((m = /^(\s*)([-*]|\d+\.)\s+(.*)$/.exec(line))) {
       flush();
       const kind = /\d/.test(m[2]) ? "ol" : "ul";
       if (list !== kind) { close(); html += `<${kind}>`; list = kind; }
-      html += `<li${m[1].length >= 2 ? ' style="margin-left:14px"' : ""}>${inline(m[3], p)}</li>`;
+      html += `<li${m[1].length >= 2 ? ' style="margin-left:14px"' : ""}>${inline(m[3], r)}</li>`;
       continue;
     }
-    if (list && /^\s{2,}\S/.test(raw)) { html = html.replace(/<\/li>$/, ` ${inline(line.trim(), p)}</li>`); continue; }
+    if (list && /^\s{2,}\S/.test(raw)) { html = html.replace(/<\/li>$/, ` ${inline(line.trim(), r)}</li>`); continue; }
     close();
     para.push(line.trim());
   }
@@ -1112,24 +1304,18 @@ function md(text, p) {
 }
 app.addEventListener("click", (ev) => {
   const el = ev.target.closest && ev.target.closest("[data-ticket]");
-  if (el && cur) select(parseInt(el.dataset.ticket, 10));
+  if (el) select({ region: el.dataset.region, ticket: parseInt(el.dataset.ticket, 10) }, true);
 });
 
 // ---------- live: any comb's new history entry re-reads that comb ----------
 let busy = Promise.resolve();
-function rerender() {
-  if (screen === "world" && cur) {
-    const p = projects.get(cur.key);
-    if (!p) return renderAtlas();
-    if (p !== cur) { cur = p; renderWorld(); } else renderPanel();
-  } else renderAtlas();
-}
 ue.onHistory && ue.onHistory((comb) => {
   busy = busy.then(async () => {
     combHeads.delete(comb);
     await scanAll();
+    renderPanel();
     await buildFeed();
-    rerender();
+    renderPanel();
   }).catch((e) => console.error(e));
 });
 
@@ -1142,10 +1328,10 @@ try {
   art = await loadArt();
   step("reading every comb in datacombs…");
   await scanAll();
-  if (S.project && projects.has(S.project)) openProject(S.project, S.ticket);
-  else renderAtlas();
+  if (S.sel && !byKey.has(S.sel.region)) S.sel = null;
+  mount();
   await buildFeed();
-  if (screen === "atlas") renderAtlas();
+  renderPanel();
 } catch (e) {
   console.error(e);
   app.replaceChildren(h("div", { class: "loading" }, h("b", {}, "WayQuest could not start"), h("div", { class: "err" }, String((e && e.stack) || e))));
