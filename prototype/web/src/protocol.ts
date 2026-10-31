@@ -79,6 +79,7 @@ export type Request =
   | { id: number; method: "saveFile"; comb: string; path: string; content: string } // you, editing outside pi → external entry
   | { id: number; method: "freeStatus" } // the free-tier router's view of its models
   | { id: number; method: "machine" } // snapshot of /machine for the view, plus where the view comes from
+  | { id: number; method: "viewRead"; op: ViewReadOp; arg: string } // what a view may read: gfs paths, read-only
   | { id: number; method: "remotesConfigure"; remotes: import("./remotes").RemoteConfig[] } // the page owns remote configs (tokens included)
   | { id: number; method: "remoteSync"; comb: string }
   | { id: number; method: "remoteResolve"; comb: string; choice: "mine" | "theirs" }
@@ -93,9 +94,29 @@ export interface BridgeInbound {
   event: import("./egress").BridgeEvent;
 }
 
+/**
+ * Reads a view may make, all read-only, all by gfs path (`/datacombs/<comb>[@<entry>]/…`, `/nix/…`, `/machine/…`):
+ * `combs` (arg ignored) every comb with its head and newest entry; `log` (arg: a comb) its history, newest first;
+ * `list` every file under a directory, as `[path relative to it, size]`; `read` a file as text; `bytes` as bytes.
+ */
+export type ViewReadOp = "combs" | "log" | "list" | "read" | "bytes";
+
+/** One comb, as a view sees it in `ue.combs`. */
+export interface CombSummary {
+  name: string;
+  head: string;
+  entries: number;
+  files: number;
+  bytes: number;
+  created: number | null;
+  last: Pick<HistoryEntry, "id" | "time" | "kind" | "message" | "tool_name" | "author" | "summary"> | null;
+  remote: { label: string; url: string; branch: string; state: string; ahead: number; lastSync: number | null } | null;
+}
+
 export interface MachineView {
   machine: Record<string, string>;
   view: { entry: string | null; path: string };
+  combs: CombSummary[];
 }
 
 export interface EntryDetail {

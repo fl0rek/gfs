@@ -1,7 +1,7 @@
 // PROTOTYPE. The page: pi's console on the left, the comb's history on the right.
 
 import { AgentWorker } from "./rpc";
-import type { EntryDetail, HistoryEntry, InitInfo, MachineView, ModelConfig, VerifyReport } from "./protocol";
+import type { EntryDetail, HistoryEntry, InitInfo, MachineView, ModelConfig, VerifyReport, ViewReadOp } from "./protocol";
 import type { RemoteConfig, RemoteStatus } from "./remotes";
 import { CWD, NIX_COMB, VIEW_PATH, WORKSPACE } from "./paths";
 
@@ -35,11 +35,22 @@ let treeAt: { entryId: string; files: [string, string, number][]; open?: { path:
 let filesView: { comb: string; files: [string, string, number][]; open?: { path: string; text: string; dirty: boolean } } | null = null;
 let error: string | null = null;
 let config: ModelConfig = loadConfig();
-// Surfaces: the console (chat + history) or the view, the page the harness programs for itself at /nix/view/index.html.
-// You switch; the harness only controls what is inside the view.
-type Surface = "console" | "view";
-let surface: Surface = (sessionStorage.getItem("pi-on-gfs.surface") as Surface) === "view" ? "view" : "console";
-let viewStale = false; // /nix changed while you were on the console
+// Surfaces: the console (chat + history) or one of the views, pages the harness programs for itself in /nix.
+// Every view/index.html under /nix is a view: view/index.html is "view", view/<name>/index.html is "<name>".
+// You switch; the harness only controls what is inside a view (and can add one by writing its index.html).
+type Surface = "console" | `view:${string}`;
+let surface: Surface = loadSurface();
+function loadSurface(): Surface {
+  const s = sessionStorage.getItem("pi-on-gfs.surface");
+  if (s === "view") return "view:"; // before there was more than one view
+  return s?.startsWith("view:") ? (s as Surface) : "console";
+}
+/** View names found in /nix ("" is view/index.html). */
+let views: string[] = [];
+const viewName = (s: Surface) => (s.startsWith("view:") ? s.slice(5) : null);
+const viewPathOf = (name: string) => (name ? `view/${name}/index.html` : VIEW_PATH);
+const viewLabel = (name: string) => name || "view";
+let staleViews = new Set<string>(); // views whose files changed while you were elsewhere
 // Git remotes: configs (tokens included) live in this browser's localStorage, like model keys; the worker syncs.
 let remoteConfigs: RemoteConfig[] = loadRemotes();
 let remoteStatus: RemoteStatus[] = [];
@@ -138,11 +149,10 @@ worker.on(async (n) => {
     render();
   } else if (n.type === "history") {
     if (info) info.objectCount = n.objectCount;
+    if (info && !info.combs.includes(n.comb)) info.combs = [...info.combs, n.comb]; // a comb the session just created
     await refreshLog(n.comb);
-    if (n.comb === NIX_COMB) {
-      if (surface === "view") void loadView();
-      else viewStale = true;
-    }
+    if (n.comb === NIX_COMB) await onNixEntry();
+    pushHistory(n.comb);
     render();
   } else if (n.type === "agent") {
     await onAgentEvent(n.event as any);
@@ -297,34 +307,75 @@ async function saveFile() {
   render();
 }
 
-// ---------- the view ----------
+// ---------- the views ----------
 // The frame lives outside #app so re-renders of the page never reload it (moving an iframe in the DOM reloads it).
 const viewHost = h("div", { class: "view-host", hidden: true }) as HTMLDivElement;
 const viewFrame = h("iframe", { class: "view-frame", sandbox: "allow-scripts allow-forms", title: "view" }) as HTMLIFrameElement;
 viewHost.append(viewFrame);
 document.body.append(viewHost);
 let viewTimer: number | null = null;
+let shownView: string | null = null; // the view the frame holds
 
 function setSurface(s: Surface) {
   surface = s;
   try { sessionStorage.setItem("pi-on-gfs.surface", s); } catch {}
-  if (s === "view") { viewStale = false; void loadView(); }
+  const name = viewName(s);
+  if (name != null) { staleViews.delete(name); void loadView(); }
   else stopViewUpdates();
   render();
 }
 
-/** Read /nix/view/index.html and render it in the sandbox with a fresh /machine snapshot. */
+/** Which views /nix holds: every view/index.html and view/<name>/index.html. */
+async function refreshViews() {
+  try {
+    const files = await worker.call<[string, string, number][]>({ method: "tree", comb: NIX_COMB });
+    views = files
+      .map(([p]) => /^view\/(?:([^/]+)\/)?index\.html$/.exec(p))
+      .filter((m): m is RegExpExecArray => !!m)
+      .map((m) => m[1] ?? "")
+      .sort((a, b) => (a === "" ? -1 : b === "" ? 1 : a.localeCompare(b)));
+  } catch {
+    views = [];
+  }
+}
+
+/**
+ * A /nix entry landed. The first view ("view") re-renders on every /nix entry, as it always has; a named view
+ * re-renders when the entry touched its own directory. Either way every view hears about it through ue.onHistory.
+ */
+async function onNixEntry() {
+  await refreshViews();
+  const latest = logs[NIX_COMB]?.[0];
+  const touched = latest ? [...latest.summary.added, ...latest.summary.modified, ...latest.summary.removed] : [];
+  for (const name of views) {
+    const hit = name === "" || touched.some((p) => p.startsWith(`view/${name}/`));
+    if (!hit) continue;
+    if (viewName(surface) === name) void loadView();
+    else staleViews.add(name);
+  }
+  const current = viewName(surface);
+  if (current != null && !views.includes(current) && info) setSurface("console");
+}
+
+/** Per-view state the page keeps for it (ue.state / ue.setState), so a re-render or reload keeps its place. */
+function viewState(name: string): unknown {
+  try { return JSON.parse(sessionStorage.getItem(`pi-on-gfs.view-state:${name}`) ?? "null"); } catch { return null; }
+}
+
+/** Read a view's index.html from /nix and render it in the sandbox with a fresh snapshot and the ue API. */
 async function loadView() {
   stopViewUpdates();
   viewError = null;
+  const name = viewName(surface);
+  if (name == null) return;
   try {
     const snap = await worker.call<MachineView>({ method: "machine" });
     if (!snap.view.entry) throw new Error("no /nix comb (shell disabled?)");
-    const html = await worker.call<string>({ method: "file", comb: NIX_COMB, path: VIEW_PATH });
-    const data = JSON.stringify(snap).replace(/</g, "\\u003c");
-    const boot = `<script>(function(){var D=${data};var fns=[];window.ue={machine:D.machine,view:D.view,prompt:function(t){parent.postMessage({type:"ue:prompt",text:String(t)},"*")},onUpdate:function(f){fns.push(f)}};window.addEventListener("message",function(e){var d=e.data;if(!d||d.type!=="ue:machine")return;window.ue.machine=d.machine;window.ue.view=d.view;fns.forEach(function(f){try{f()}catch(err){console.error(err)}})});})();<\/script>`;
-    const at = html.search(/<head[^>]*>/i);
-    viewFrame.srcdoc = at >= 0 ? html.slice(0, html.indexOf(">", at) + 1) + boot + html.slice(html.indexOf(">", at) + 1) : boot + html;
+    const path = viewPathOf(name);
+    const html = await worker.call<string>({ method: "file", comb: NIX_COMB, path });
+    const data = JSON.stringify({ ...snap, view: { ...snap.view, path: `/nix/${path}`, name: viewLabel(name) }, state: viewState(name) }).replace(/</g, "\\u003c");
+    viewFrame.srcdoc = injectUe(html, data);
+    shownView = name;
     viewEntry = snap.view.entry;
     viewTimer = window.setInterval(pushMachine, 4000);
   } catch (e: any) {
@@ -332,24 +383,69 @@ async function loadView() {
   }
   render();
 }
+
+/**
+ * window.ue, the API every view gets (see /nix/README.md). Reads go through the page to the worker; all are
+ * read-only and take gfs paths, so `/datacombs/<comb>@<entry>/…` is the past, as it is for the harness.
+ */
+function injectUe(html: string, data: string): string {
+  const boot = `<script>(function(){var D=${data};var fns=[],hist=[],calls={},next=1;
+function call(op,arg){return new Promise(function(res,rej){var id=next++;calls[id]={res:res,rej:rej};parent.postMessage({type:"ue:call",id:id,op:op,arg:String(arg)},"*")})}
+window.ue={machine:D.machine,view:D.view,combs:D.combs||[],state:D.state,
+prompt:function(t){parent.postMessage({type:"ue:prompt",text:String(t)},"*")},
+onUpdate:function(f){fns.push(f)},onHistory:function(f){hist.push(f)},
+read:function(p){return call("read",p)},bytes:function(p){return call("bytes",p)},list:function(p){return call("list",p)},log:function(c){return call("log",c)},
+setState:function(s){window.ue.state=s;parent.postMessage({type:"ue:state",state:JSON.parse(JSON.stringify(s))},"*")}};
+function each(a,x){a.forEach(function(f){try{f(x)}catch(err){console.error(err)}})}
+window.addEventListener("message",function(e){var d=e.data;if(!d||e.source!==parent)return;
+if(d.type==="ue:reply"){var c=calls[d.id];if(!c)return;delete calls[d.id];if(d.ok)c.res(d.result);else c.rej(new Error(d.error));return}
+if(d.type==="ue:machine"){window.ue.machine=d.machine;window.ue.view.entry=d.view.entry;if(d.combs)window.ue.combs=d.combs;each(fns)}
+if(d.type==="ue:history"){if(d.combs)window.ue.combs=d.combs;each(hist,d.comb);each(fns)}})})();<\/script>`;
+  const at = html.search(/<head[^>]*>/i);
+  return at >= 0 ? html.slice(0, html.indexOf(">", at) + 1) + boot + html.slice(html.indexOf(">", at) + 1) : boot + html;
+}
+
 async function pushMachine() {
-  if (surface !== "view" || !viewFrame.contentWindow) return;
+  if (viewName(surface) == null || !viewFrame.contentWindow) return;
   try {
     const snap = await worker.call<MachineView>({ method: "machine" });
     viewFrame.contentWindow.postMessage({ type: "ue:machine", ...snap }, "*");
+  } catch {}
+}
+/** Tell the shown view that a comb has a new history entry. */
+async function pushHistory(comb: string) {
+  if (viewName(surface) == null || !viewFrame.contentWindow) return;
+  try {
+    const combs = await worker.call({ method: "viewRead", op: "combs", arg: "" });
+    viewFrame.contentWindow.postMessage({ type: "ue:history", comb, combs }, "*");
   } catch {}
 }
 function stopViewUpdates() {
   if (viewTimer != null) clearInterval(viewTimer);
   viewTimer = null;
 }
-// The view may ask the harness for something; that is a prompt from you, in the console.
-window.addEventListener("message", (ev) => {
-  if (ev.source !== viewFrame.contentWindow || !ev.data || ev.data.type !== "ue:prompt") return;
-  const text = String(ev.data.text ?? "").trim();
-  if (!text) return;
-  statusText = `sent to pi from the view: ${text.slice(0, 60)}`;
-  void send(text);
+const VIEW_READS: ViewReadOp[] = ["combs", "log", "list", "read", "bytes"];
+// The view may ask the harness for something (a prompt from you, in the console), read gfs, or keep its state.
+window.addEventListener("message", async (ev) => {
+  if (ev.source !== viewFrame.contentWindow || !ev.data) return;
+  const d = ev.data;
+  if (d.type === "ue:prompt") {
+    const text = String(d.text ?? "").trim();
+    if (!text) return;
+    statusText = `sent to pi from the view: ${text.slice(0, 60)}`;
+    void send(text);
+  } else if (d.type === "ue:state" && shownView != null) {
+    try { sessionStorage.setItem(`pi-on-gfs.view-state:${shownView}`, JSON.stringify(d.state)); } catch {}
+  } else if (d.type === "ue:call" && typeof d.id === "number") {
+    const reply = (m: object, transfer: Transferable[] = []) => viewFrame.contentWindow?.postMessage({ type: "ue:reply", id: d.id, ...m }, "*", transfer);
+    if (!VIEW_READS.includes(d.op)) return reply({ ok: false, error: `ue: no such read: ${d.op}` });
+    try {
+      const result = await worker.call({ method: "viewRead", op: d.op, arg: String(d.arg ?? "") });
+      reply({ ok: true, result }, result instanceof Uint8Array ? [result.buffer] : []);
+    } catch (e: any) {
+      reply({ ok: false, error: e.message });
+    }
+  }
 });
 
 async function wipe() {
@@ -382,7 +478,10 @@ function renderInner() {
       h("div", { class: "brand" }, h("b", {}, "pi on gfs"), h("span", { class: "muted" }, " · prototype, throwaway")),
       h("div", { class: "surfaces", role: "tablist" },
         h("button", { class: `tab${surface === "console" ? " active" : ""}`, role: "tab", "aria-selected": surface === "console", onClick: () => setSurface("console") }, "console"),
-        h("button", { class: `tab${surface === "view" ? " active" : ""}`, role: "tab", "aria-selected": surface === "view", title: `/nix/${VIEW_PATH}`, onClick: () => setSurface("view") }, "view", viewStale ? h("span", { class: "dot", title: "/nix changed; the view will re-render" }) : null),
+        views.map((name) => {
+          const s: Surface = `view:${name}`;
+          return h("button", { class: `tab${surface === s ? " active" : ""}`, role: "tab", "aria-selected": surface === s, title: `/nix/${viewPathOf(name)}`, onClick: () => setSurface(s) }, viewLabel(name), staleViews.has(name) ? h("span", { class: "dot", title: "its files changed; it will re-render" }) : null);
+        }),
       ),
       h("div", { class: "status" },
         busy || statusText.endsWith("…") ? h("span", { class: "spinner" }) : null,
@@ -394,12 +493,12 @@ function renderInner() {
     ),
     error ? h("div", { class: "error" }, error, h("button", { class: "link", onClick: () => { error = null; render(); } }, "dismiss")) : null,
     systemNotice ? h("div", { class: "notice" }, "system ", systemNotice, h("button", { class: "link", onClick: () => { systemNotice = null; render(); } }, "ok")) : null,
-    surface === "view" ? renderViewSurface() : h("main", { class: "split" }, renderConsole(), renderTimeline()),
+    viewName(surface) != null ? renderViewSurface() : h("main", { class: "split" }, renderConsole(), renderTimeline()),
   ));
   // The frame is fixed under the header; show it only on the view surface.
   const main = app.querySelector("main");
-  viewHost.hidden = surface !== "view" || !!viewError;
-  if (main && surface === "view") viewHost.style.top = `${main.getBoundingClientRect().top}px`;
+  viewHost.hidden = viewName(surface) == null || !!viewError;
+  if (main && viewName(surface) != null) viewHost.style.top = `${main.getBoundingClientRect().top}px`;
 }
 
 function renderViewSurface() {
@@ -407,8 +506,8 @@ function renderViewSurface() {
     viewError
       ? h("div", { class: "empty", style: "padding:14px" }, h("p", {}, "The view could not be rendered: ", viewError), h("button", { onClick: () => void loadView() }, "Retry"))
       : h("div", { class: "view-bar muted small" },
-          h("span", { class: "mono" }, `/nix/${VIEW_PATH}`), viewEntry ? h("span", { class: "mono" }, ` @${short(viewEntry)}`) : null,
-          h("span", {}, " · pi programs this page; it re-renders on every /nix entry"),
+          h("span", { class: "mono" }, `/nix/${viewPathOf(viewName(surface) ?? "")}`), viewEntry ? h("span", { class: "mono" }, ` @${short(viewEntry)}`) : null,
+          h("span", {}, viewName(surface) ? " · pi programs this page; it re-renders when its files in /nix change" : " · pi programs this page; it re-renders on every /nix entry"),
         ),
   );
 }
@@ -951,8 +1050,12 @@ setTimeout(() => {
     for (const c of info.combs) await refreshLog(c);
     await finishForgejoSignIn();
     remoteStatus = await worker.call({ method: "remotesConfigure", remotes: remoteConfigs });
+    await refreshViews();
     render();
-    if (surface === "view") void loadView();
+    if (viewName(surface) != null) {
+      if (views.includes(viewName(surface)!)) void loadView();
+      else setSurface("console");
+    }
     void worker.call({ method: "boot" });
   } catch (e: any) {
     error = `worker failed to start: ${e.message}`;

@@ -20,11 +20,12 @@ import { makeTools } from "./tools";
 import { WasixShell, UnavailableShell, installRegistryShim, loadDeployedSystem, processLog, runtimeHeapBytes, type Shell, type SystemManifest } from "./shell";
 import { readMachine, machineSnapshot, type MachineSources } from "./machine";
 import seedView from "./view-seed.html?raw";
+import { WAYQUEST_DIR, wayquestSeed } from "./views/wayquest/seed";
 import { VIEW_PATH } from "./paths";
 import { GfsHostFs } from "./hostfs";
 import { createMockProvider, MOCK_MODEL_ID, MOCK_PROVIDER_ID } from "./mock-model";
 import { CWD, WORKSPACE, NIX_COMB, resolvePath } from "./paths";
-import type { Author, BridgeInbound, EntryDetail, InitInfo, ModelConfig, Notification, Reply, Request } from "./protocol";
+import type { Author, BridgeInbound, CombSummary, EntryDetail, InitInfo, ModelConfig, Notification, Reply, Request, ViewReadOp } from "./protocol";
 import { installBridge, onBridgeEvent, setBridgeAvailable, smartFetch, egressMode } from "./egress";
 import { Remotes } from "./remotes";
 import { deviceStart, devicePoll, tokenRequest } from "./login";
@@ -160,6 +161,16 @@ async function init(shellParam?: string, trace?: boolean): Promise<InitInfo> {
       if (!dc.listAll(NIX_COMB).some(([p]) => p === VIEW_PATH)) {
         dc.writeFile(NIX_COMB, VIEW_PATH, seedView);
         await dc.commit(NIX_COMB, { kind: "external" }, { session: sessionId, harness: "system", model: "", principal: "user" });
+      }
+      // More views: every view/<name>/index.html is one. WayQuest is seeded once, like the first; then it is the comb's.
+      if (!dc.listAll(NIX_COMB).some(([p]) => p === `${WAYQUEST_DIR}/index.html`)) {
+        try {
+          for (const [path, bytes] of await wayquestSeed()) dc.writeFile(NIX_COMB, path, bytes);
+          await dc.commit(NIX_COMB, { kind: "external" }, { session: sessionId, harness: "system", model: "", principal: "user" });
+        } catch (e: any) {
+          dc.resetWorking(NIX_COMB);
+          console.warn("wayquest view not seeded:", e);
+        }
       }
       // Don't block the page on 18 MB of wasm: the system comes up after init returns.
       pendingBoot = true;
@@ -312,6 +323,8 @@ function systemPrompt() {
     `Your working directory is ${CWD}, which holds the combs: versioned directories whose every tool call becomes one history entry. Work in ${CWD}/${WORKSPACE} (relative paths start at ${CWD}, so write workspace/notes.md, not notes.md). A comb's past is readable at ${CWD}/<comb>@<entry-id>/<path>.`,
     `/nix is the comb holding the running system's flake: machine.json lists the packages the shell sandbox runs, pinned by sha256; editing it (any tool call that changes it) switches the system; flake.nix is its source but cannot be built here.`,
     `/nix/view/index.html is the view: a page the user can switch to instead of this console. You own it: edit it (any tool call that changes it commits it) and it re-renders on the next history entry. It runs in a sandbox with window.ue = { machine: <every /machine entry as text>, view: { entry, path }, prompt(text) }; call ue.onUpdate(fn) to redraw when a fresh snapshot arrives. No network, no access to the page around it.`,
+    `Every view/<name>/index.html in /nix is another view, which the user can switch to (they pick; you only shape what is inside). Views also get read-only access to gfs through window.ue: ue.combs (every comb with its head and newest entry), ue.list(dir), ue.read(path), ue.bytes(path), ue.log(comb), ue.onHistory(fn) (any comb got an entry), ue.state/ue.setState(o). /nix/view/wayquest/ is WayQuest: every project in datacombs, each wayfinder map (.scratch/<effort>/map.md + issues/NN-*.md) as an overworld.`,
+    `Each top-level directory in ${CWD} is a comb, one project each; writing into ${CWD}/<new-name>/… creates a new comb.`,
     `/machine is read-only and describes this node (read /machine for the index: session, system, shell, processes, runtime, agent, storage, egress, mounts, uptime).`,
     `A comb may be backed by a git remote (see /machine/git): each of its history entries is pushed there as one git commit, automatically. Nothing to do on your side; there is no git CLI.`,
     `bash runs in a WASIX sandbox with the same root mounted live (/datacombs/<comb>, /datacombs/<comb>@<entry>, /nix, /machine), cwd ${CWD}. The Nix-built system has bash, coreutils, grep, sed, awk, find, xargs, diff; no git. It has no network; use the fetch tool for HTTP. Prefer the read tool over cat.`,
@@ -383,6 +396,50 @@ const machineSources: MachineSources = {
   sdkVersion: () => "@wasmer/sdk 0.19.1",
   git: () => remotes.list().map(({ pushed, events, ...s }) => ({ ...s, entriesOnRemote: Object.keys(pushed).length, events: events.slice(-8) })),
 };
+
+/** Every comb, as views see it: head, size, newest entry, git remote. */
+function combSummaries(): CombSummary[] {
+  const remote = new Map(remotes.list().map((r) => [r.comb, r]));
+  return dc.listCombs().map((name) => {
+    const log = dc.log(name);
+    const files = dc.listAll(name);
+    const last = log[0];
+    const r = remote.get(name);
+    return {
+      name,
+      head: dc.head(name),
+      entries: log.length,
+      files: files.length,
+      bytes: files.reduce((n, [, , size]) => n + size, 0),
+      created: log.length ? log[log.length - 1].time : null,
+      last: last ? { id: last.id, time: last.time, kind: last.kind, message: last.message, tool_name: last.tool_name, author: last.author, summary: last.summary } : null,
+      remote: r ? { label: r.label, url: r.url, branch: r.branch, state: r.state, ahead: r.ahead, lastSync: r.lastSync } : null,
+    };
+  });
+}
+
+/**
+ * What a view may read: gfs paths, read-only, the same addressing the harness uses
+ * (`/datacombs/<comb>@<entry>/…` is the past). Views see every comb on the node; there are no grants yet.
+ */
+async function viewRead(op: ViewReadOp, arg: string): Promise<unknown> {
+  if (op === "combs") return combSummaries();
+  if (op === "log") return dc.log(arg);
+  const r = resolvePath(arg);
+  if (r.kind === "machine") {
+    if (op === "read") return readMachine(machineSources, r.path);
+    if (op === "bytes") return new TextEncoder().encode(await readMachine(machineSources, r.path));
+    throw new Error(`${arg}: /machine is generated on read; read its files one by one`);
+  }
+  if (!dc.hasComb(r.comb)) throw new Error(`${arg}: no comb ${r.comb}`);
+  if (op === "list") {
+    const all = r.at ? dc.listAllAt(r.at) : dc.listAll(r.comb);
+    const prefix = r.path ? `${r.path.replace(/\/+$/, "")}/` : "";
+    return all.filter(([p]) => p.startsWith(prefix)).map(([p, , size]) => [p.slice(prefix.length), size]);
+  }
+  const bytes = r.at ? dc.readFileAt(r.at, r.path) : dc.readFile(r.comb, r.path);
+  return op === "bytes" ? bytes : new TextDecoder().decode(bytes);
+}
 
 /** Combs backed by git remotes: every entry is pushed shortly after it lands. */
 const remotes = new Remotes({
@@ -575,7 +632,9 @@ async function handle(req: Request): Promise<unknown> {
       return { output: res.output + refused, exitCode: refused ? 1 : res.exitCode };
     }
     case "machine":
-      return { machine: await machineSnapshot(machineSources), view: { entry: dc.hasComb(NIX_COMB) ? dc.head(NIX_COMB) : null, path: `/nix/${VIEW_PATH}` } };
+      return { machine: await machineSnapshot(machineSources), view: { entry: dc.hasComb(NIX_COMB) ? dc.head(NIX_COMB) : null, path: `/nix/${VIEW_PATH}` }, combs: combSummaries() };
+    case "viewRead":
+      return viewRead(req.op, req.arg);
     case "wipe":
       await dc.wipe();
       return null;

@@ -147,6 +147,12 @@ export function makeTools(ctx: ToolContext): AgentTool<any, any>[] {
     async execute(_id, params: any) {
       const { path, content } = params;
       const r = writable(path);
+      // A session can create combs ("What one datacomb is"): writing into /datacombs/<new>/… makes one,
+      // starting with its genesis entry; the write is then its first tool-call entry like any other.
+      if (!dc.hasComb(r.comb)) {
+        if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(r.comb)) throw new Error(`${r.comb}: a comb name is letters, digits, '.', '_' and '-'`);
+        await dc.createComb(r.comb, ctx.author());
+      }
       dc.writeFile(r.comb, r.path, content);
       return text(`Successfully wrote to ${path}`);
     },
