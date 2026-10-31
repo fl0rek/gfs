@@ -22,7 +22,16 @@ What it is:
 
 ## Run it
 
-Hosted build: https://fl0rek.github.io/gfs/ (deployed from this branch by `.github/workflows/prototype-pages.yml`).
+With Nix (flakes on), from the `wayquest-gfs` branch, which deploys nothing:
+
+```sh
+nix run github:fl0rek/gfs/wayquest-gfs             # build, then serve on http://127.0.0.1:4173/ (--port N)
+nix run github:fl0rek/gfs/wayquest-gfs#nix-built   # the same, with the Nix-built WASIX userland (prototype/machine)
+```
+
+In a checkout, `nix run .` does the same, and `nix develop` gives node, pnpm, Rust with wasm32, wasm-bindgen and binaryen. The flake (`flake.nix` at the repo root) builds gfs-core to wasm, the web app offline with vite (pnpm dependencies and the WASIX packages pinned by hash), and serves it with the headers `SharedArrayBuffer` needs. Everything you do lives in that browser's OPFS, per origin, so a different port is a fresh node.
+
+Hosted build: https://fl0rek.github.io/gfs/ (deployed from `prototype/pi-on-gfs` by `.github/workflows/prototype-pages.yml`).
 
 Locally (needs Rust, `wasm32-unknown-unknown`, `wasm-bindgen-cli` 0.2.129, Node 22, pnpm):
 

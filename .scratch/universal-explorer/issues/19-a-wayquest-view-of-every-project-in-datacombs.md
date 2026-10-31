@@ -18,7 +18,7 @@ Build a rough version to react to. The prototype has to take a stance on:
 
 ## Prototype
 
-Built 2026-10-31 on top of the live prototype, on branch `ccr-1c17bdbc-k8u1li` (`main` with `prototype/pi-on-gfs` merged in; merging it into `prototype/pi-on-gfs` deploys it to https://fl0rek.github.io/gfs/). In the app it is the **wayquest** tab beside console and view.
+Built 2026-10-31 on top of the live prototype, on branch `wayquest-gfs` (`main` with `prototype/pi-on-gfs` merged in). It deploys nothing; run it with `nix run github:fl0rek/gfs/wayquest-gfs` (see `prototype/README.md`). In the app it is the **wayquest** tab beside console and view.
 
 - Standalone copy to react to on a phone: https://claude.ai/artifact/Sg4HN6bA2iQ91rLNqDRUEp. It is the same page over a snapshot of a node whose datacombs hold this repo and fl0rek/wayquest, with one history entry per commit that touched their maps (session and model from the commit trailers).
 - The page: `prototype/web/src/views/wayquest/index.html`, seeded once into `/nix/view/wayquest/`. WayQuest's side: `crates/wasm` in fl0rek/wayquest.

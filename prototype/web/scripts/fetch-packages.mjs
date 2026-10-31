@@ -1,5 +1,7 @@
 // PROTOTYPE. Fetch the WASIX packages the shell needs, pinned by sha256, into public/packages/.
 // Run at build time so the hosted site never depends on the Wasmer CDN at runtime.
+// OFFLINE=1 (the Nix build): fetch nothing; the .webc files must already be in public/packages/ (Nix fetches
+// them by the same hashes), and the registry answers committed in public/packages/index.json are kept.
 import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync, existsSync, readFileSync, copyFileSync } from "node:fs";
 
@@ -18,6 +20,7 @@ export const PACKAGES = {
   "wasmer/coreutils@1.0.27": "35028c4e6b9fa8cccdffdcab2007d1df3af31b3f2b22fb890d022d7ae723bbd3",
 };
 
+const offline = !!process.env.OFFLINE;
 const out = new URL("../public/packages/", import.meta.url);
 mkdirSync(out, { recursive: true });
 for (const [name, sha] of Object.entries(PACKAGES)) {
@@ -26,6 +29,7 @@ for (const [name, sha] of Object.entries(PACKAGES)) {
     console.log(`${name}: cached`);
     continue;
   }
+  if (offline) throw new Error(`${name}: OFFLINE and public/packages/${sha}.webc is missing or wrong`);
   const url = `https://cdn.wasmer.io/webcimages/${sha}.webc`;
   let bytes;
   for (let attempt = 1; ; attempt++) {
@@ -44,7 +48,12 @@ for (const [name, sha] of Object.entries(PACKAGES)) {
 // (the URL is baked into its wasm core). Record the registry's answer for each pinned package so
 // the worker can serve it locally (see shell.ts, registryShim) and the site needs no wasmer.io at all.
 const registry = {};
-for (const name of Object.keys(PACKAGES)) {
+if (offline && existsSync(new URL("index.json", out))) {
+  const kept = JSON.parse(readFileSync(new URL("index.json", out), "utf8"));
+  if (JSON.stringify(kept.packages) !== JSON.stringify(PACKAGES)) throw new Error("OFFLINE: public/packages/index.json is for other packages");
+  Object.assign(registry, kept.registry);
+  console.log("registry: offline, keeping the recorded answers");
+} else for (const name of Object.keys(PACKAGES)) {
   const bare = name.split("@")[0];
   const query = QUERY.replace('"wasmer/coreutils"', JSON.stringify(bare));
   const res = await fetch("https://registry.wasmer.io/graphql", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query }) });
@@ -60,7 +69,7 @@ for (const name of Object.keys(PACKAGES)) {
 writeFileSync(new URL("index.json", out), JSON.stringify({ packages: PACKAGES, registry }, null, 1));
 
 // ---- the free-tier model list (snapshot; the worker fetches the live one when it can) ----
-try {
+if (!offline) try {
   const res = await fetch("https://anus.dev/free-models.json");
   const list = await res.json();
   if (Array.isArray(list.models)) {
